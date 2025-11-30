@@ -1,0 +1,879 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Omega Compressor</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg-app: #0f0f0f;
+            --bg-panel: #1a1a1a;
+            --border: #333333;
+            --text-main: #ffffff;
+            --text-dim: #a3a3a3;
+            --accent: #3b82f6;
+            --success: #22c55e;
+            --warning: #eab308;
+            --danger: #ef4444;
+        }
+
+        body {
+            background-color: var(--bg-app);
+            color: var(--text-main);
+            font-family: 'Inter', sans-serif;
+            height: 100vh;
+            overflow: hidden;
+            font-size: 13px;
+        }
+
+        .panel {
+            background-color: var(--bg-panel);
+            border-right: 1px solid var(--border);
+        }
+
+        .grid-layout {
+            display: grid;
+            grid-template-columns: 260px 1fr 320px;
+            grid-template-rows: 1fr;
+            height: 100vh;
+        }
+
+        ::-webkit-scrollbar {
+            width: 6px;
+        }
+
+        ::-webkit-scrollbar-track {
+            background: transparent;
+        }
+
+        ::-webkit-scrollbar-thumb {
+            background: #444;
+            border-radius: 3px;
+        }
+
+        ::-webkit-scrollbar-thumb:hover {
+            background: #666;
+        }
+
+        .selected-row {
+            background-color: rgba(59, 130, 246, 0.15);
+            border-left: 2px solid var(--accent);
+        }
+
+        select,
+        button {
+            transition: all 0.2s ease;
+        }
+    </style>
+</head>
+
+<body>
+
+    <div class="grid-layout">
+        <!-- LEFT: INPUT & DROP ZONE -->
+        <div class="panel flex flex-col">
+            <div class="p-5 border-b border-[#333]">
+                <h2 class="text-[10px] font-bold text-[#666] uppercase tracking-[0.2em]">Input Source</h2>
+            </div>
+
+            <!-- Minimalist Drop Zone -->
+            <div id="drop-zone"
+                class="m-5 flex-1 border border-dashed border-[#444] rounded-xl flex flex-col items-center justify-center cursor-pointer hover:border-white hover:bg-[#222] transition-all group relative overflow-hidden">
+                <div
+                    class="absolute inset-0 bg-gradient-to-br from-blue-500/5 to-purple-500/5 opacity-0 group-hover:opacity-100 transition-opacity">
+                </div>
+
+                <!-- Modern Icon -->
+                <svg class="w-12 h-12 text-[#444] group-hover:text-white transition-colors mb-4" fill="none"
+                    stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5"
+                        d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12">
+                    </path>
+                </svg>
+
+                <p class="text-sm font-medium text-[#888] group-hover:text-white transition-colors">Drop Media</p>
+                <input type="file" id="file-input" class="hidden" multiple>
+            </div>
+
+            <div class="p-5 border-t border-[#333]">
+                <h3 class="text-[10px] font-bold text-[#666] mb-4 uppercase tracking-[0.2em]">Watch Folders</h3>
+                <ul class="space-y-3">
+                    <li class="flex items-center gap-3 text-[#aaa] hover:text-white transition-colors cursor-default">
+                        <div class="w-1.5 h-1.5 rounded-full bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.4)]">
+                        </div>
+                        <span class="font-medium">Auto Pilot</span>
+                    </li>
+                    <li class="flex items-center gap-3 text-[#aaa] hover:text-white transition-colors cursor-default">
+                        <div class="w-1.5 h-1.5 rounded-full bg-amber-500 shadow-[0_0_8px_rgba(245,158,11,0.4)]"></div>
+                        <span class="font-medium">Human Review</span>
+                    </li>
+                </ul>
+            </div>
+        </div>
+
+        <!-- CENTER: BATCH LIST -->
+        <div class="panel flex flex-col relative border-r-0">
+            <!-- Tabs Header -->
+            <div class="flex border-b border-[#333] bg-[#1a1a1a]">
+                <button onclick="switchTab('active')" id="tab-active"
+                    class="flex-1 py-3 text-[11px] font-bold uppercase tracking-wider text-white border-b-2 border-blue-500 bg-[#222]">Active</button>
+                <button onclick="switchTab('completed')" id="tab-completed"
+                    class="flex-1 py-3 text-[11px] font-bold uppercase tracking-wider text-[#666] hover:text-[#aaa] border-b-2 border-transparent">Completed</button>
+            </div>
+
+            <div class="p-3 border-b border-[#333] flex justify-between items-center bg-[#1a1a1a]">
+                <h2 class="text-[10px] font-bold text-[#666] uppercase tracking-[0.2em]" id="list-title">Queue</h2>
+                <div class="flex gap-3 items-center">
+                    <span class="text-[9px] text-[#444] font-mono">v2.1 (Live)</span>
+                    <button onclick="fetchJobs()"
+                        class="text-[10px] font-bold text-[#666] hover:text-white uppercase tracking-wider transition-colors">Refresh</button>
+                </div>
+            </div>
+
+            <div class="flex-1 overflow-y-auto bg-[#111]">
+                <table class="w-full text-left">
+                    <thead
+                        class="bg-[#161616] text-[#666] sticky top-0 text-[11px] uppercase tracking-wider font-semibold border-b border-[#222]">
+                        <tr>
+                            <th class="p-4 w-12"></th>
+                            <th class="p-4">Name</th>
+                            <th class="p-4">Status</th>
+                            <th class="p-4">Elapsed</th>
+                            <th class="p-4 w-32">Progress</th>
+                        </tr>
+                    </thead>
+                    <tbody id="job-list" class="divide-y divide-[#222]">
+                        <!-- Jobs injected here -->
+                    </tbody>
+                </table>
+            </div>
+
+            <!-- Mini Log -->
+            <div class="h-32 border-t border-[#333] bg-[#0f0f0f] p-3 overflow-y-auto font-mono text-[10px] text-[#555]"
+                id="mini-log">
+                <div class="text-[#333]">System Ready...</div>
+            </div>
+        </div>
+
+        <!-- RIGHT: INSPECTOR -->
+        <div class="panel flex flex-col bg-[#1a1a1a] border-l border-[#333]">
+            <div class="p-5 border-b border-[#333]">
+                <h2 class="text-[10px] font-bold text-[#666] uppercase tracking-[0.2em]">Inspector</h2>
+            </div>
+
+            <div id="inspector-content" class="p-6 flex-1 overflow-y-auto hidden">
+                <!-- Header -->
+                <div class="mb-8">
+                    <h1 class="text-xl font-medium text-white mb-2 truncate tracking-tight" id="insp-title">Filename
+                    </h1>
+                    <p class="text-[11px] text-[#666] font-mono mb-4" id="insp-id">ID: ...</p>
+
+                    <!-- Live Status Badge -->
+                    <div class="flex items-center gap-3">
+                        <div
+                            class="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-[#222] border border-[#333]">
+                            <div class="w-2 h-2 rounded-full bg-blue-500 animate-pulse" id="insp-status-dot"></div>
+                            <span class="text-xs font-medium text-white" id="insp-status-text">Processing...</span>
+                        </div>
+                        <span id="save-indicator"
+                            class="text-xs font-medium text-emerald-500 opacity-0 transition-opacity duration-500">✓
+                            Saved</span>
+                    </div>
+                </div>
+
+                <!-- Process Stepper -->
+                <div class="mb-8">
+                    <h3 class="text-[10px] font-bold text-[#666] uppercase tracking-wider mb-4">Process Flow</h3>
+                    <div class="relative flex flex-col gap-4 pl-2 border-l border-[#333]">
+                        <!-- Step 1: Ingest -->
+                        <div class="flex items-center gap-3 relative">
+                            <div class="absolute -left-[13px] w-6 h-6 rounded-full bg-[#1a1a1a] border border-[#333] flex items-center justify-center z-10"
+                                id="step-ingest-dot">
+                                <div class="w-1.5 h-1.5 rounded-full bg-[#444]" id="step-ingest-inner"></div>
+                            </div>
+                            <span class="text-xs text-[#666] ml-6" id="step-ingest-text">Ingest & Transcribe</span>
+                        </div>
+                        <!-- Step 2: Translate -->
+                        <div class="flex items-center gap-3 relative">
+                            <div class="absolute -left-[13px] w-6 h-6 rounded-full bg-[#1a1a1a] border border-[#333] flex items-center justify-center z-10"
+                                id="step-translate-dot">
+                                <div class="w-1.5 h-1.5 rounded-full bg-[#444]" id="step-translate-inner"></div>
+                            </div>
+                            <span class="text-xs text-[#666] ml-6" id="step-translate-text">Translate & Review</span>
+                        </div>
+                        <!-- Step 3: Burn -->
+                        <div class="flex items-center gap-3 relative">
+                            <div class="absolute -left-[13px] w-6 h-6 rounded-full bg-[#1a1a1a] border border-[#333] flex items-center justify-center z-10"
+                                id="step-burn-dot">
+                                <div class="w-1.5 h-1.5 rounded-full bg-[#444]" id="step-burn-inner"></div>
+                            </div>
+                            <span class="text-xs text-[#666] ml-6" id="step-burn-text">Finalize & Burn</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Settings Form -->
+                <div class="space-y-6">
+                    <div class="group">
+                        <label
+                            class="block text-[10px] font-bold text-[#666] uppercase tracking-wider mb-2 group-hover:text-[#888] transition-colors">Target
+                            Language</label>
+                        <div class="relative">
+                            <select id="insp-lang" onchange="updateJobSetting('target_language', this.value)"
+                                class="w-full bg-[#222] border border-[#333] rounded-lg px-3 py-2.5 text-sm text-white focus:border-[#555] focus:ring-0 outline-none appearance-none hover:bg-[#262626] transition-colors">
+                                <option value="is">Icelandic</option>
+                                <option value="en">English</option>
+                                <option value="es">Spanish</option>
+                            </select>
+                            <div class="absolute right-3 top-3 pointer-events-none text-[#666]">▼</div>
+                        </div>
+                    </div>
+
+                    <div class="group">
+                        <label
+                            class="block text-[10px] font-bold text-[#666] uppercase tracking-wider mb-2 group-hover:text-[#888] transition-colors">Visual
+                            Style</label>
+                        <div class="relative">
+                            <select id="insp-style" onchange="updateJobSetting('subtitle_style', this.value)"
+                                class="w-full bg-[#222] border border-[#333] rounded-lg px-3 py-2.5 text-sm text-white focus:border-[#555] focus:ring-0 outline-none appearance-none hover:bg-[#262626] transition-colors">
+                                <option value="Classic">Classic Box</option>
+                                <option value="Modern">Modern Clean</option>
+                                <option value="Apple">Apple Pro</option>
+                            </select>
+                            <div class="absolute right-3 top-3 pointer-events-none text-[#666]">▼</div>
+                        </div>
+                    </div>
+
+                    <div class="group">
+                        <label
+                            class="block text-[10px] font-bold text-[#666] uppercase tracking-wider mb-2 group-hover:text-[#888] transition-colors">Workflow
+                            Mode</label>
+                        <!-- Mode Toggle -->
+                        <div class="flex bg-[#222] p-1 rounded-lg mb-6">
+                            <button id="btn-mode-auto" onclick="setMode('AUTO')"
+                                class="flex-1 py-2 text-[11px] font-medium rounded-md transition-all text-[#666] hover:text-white hover:bg-[#333]">AUTO
+                                PILOT</button>
+                            <button id="btn-mode-review" onclick="setMode('REVIEW')"
+                                class="flex-1 py-2 text-[11px] font-medium rounded-md transition-all text-[#666] hover:text-white hover:bg-[#333]">MANUAL
+                                REVIEW</button>
+                        </div>
+
+                        <!-- Surgical Tool Trigger -->
+                        <button onclick="openSurgical()"
+                            class="w-full mb-6 flex items-center justify-center gap-2 bg-[#222] hover:bg-[#333] border border-[#333] hover:border-[#444] text-[#888] hover:text-white py-2 rounded transition-all group">
+                            <span class="text-lg">🩺</span>
+                            <span class="text-xs font-bold uppercase tracking-wider">Open Live Editor</span>
+                        </button>
+
+                        <!-- Quality Report -->
+                        <div id="quality-report" class="hidden mb-6 bg-[#1a1a1a] border border-[#333] rounded-lg p-4">
+                            <div class="flex items-center justify-between mb-3">
+                                <span class="text-[10px] font-bold text-[#666] uppercase tracking-wider">Quality
+                                    Report</span>
+                                <div id="qr-rating"
+                                    class="px-2 py-1 rounded bg-emerald-500/20 text-emerald-400 text-xs font-bold">--
+                                </div>
+                            </div>
+                            <div id="qr-tier" class="text-sm font-medium text-white mb-2">--</div>
+                            <p id="qr-summary" class="text-xs text-[#888] leading-relaxed mb-3">--</p>
+
+                            <div id="qr-issues-container" class="hidden mb-3">
+                                <span
+                                    class="text-[10px] font-bold text-[#666] uppercase tracking-wider block mb-1">Major
+                                    Issues</span>
+                                <ul id="qr-issues" class="list-disc list-inside text-xs text-red-400"></ul>
+                            </div>
+
+                            <div id="qr-suggestions-container" class="hidden">
+                                <span
+                                    class="text-[10px] font-bold text-[#666] uppercase tracking-wider block mb-1">Suggestions</span>
+                                <p id="qr-suggestions" class="text-xs text-[#888] italic"></p>
+                            </div>
+                        </div>
+
+                        <hr class="border-[#333] my-8">
+
+                        <!-- Actions -->
+                        <div class="space-y-3">
+                            <button id="btn-approve" onclick="approveBurn()"
+                                class="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-medium py-3 rounded-lg shadow-lg shadow-emerald-900/20 transition-all hidden">
+                                Approve Burn
+                            </button>
+
+                            <div class="grid grid-cols-2 gap-3">
+                                <button onclick="resetReview()"
+                                    class="w-full bg-[#222] hover:bg-[#2a2a2a] text-[#aaa] hover:text-white py-2.5 rounded-lg text-xs border border-[#333] transition-colors">
+                                    Reset
+                                </button>
+
+                                <button onclick="forceBurn()"
+                                    class="w-full bg-[#222] hover:bg-red-900/20 text-[#aaa] hover:text-red-400 py-2.5 rounded-lg text-xs border border-[#333] hover:border-red-900/50 transition-colors">
+                                    Force Burn
+                                </button>
+                            </div>
+
+                            <button onclick="deleteJob()"
+                                class="w-full bg-red-900/10 hover:bg-red-900/30 text-red-500/70 hover:text-red-400 py-2.5 rounded-lg text-xs border border-red-900/20 hover:border-red-900/50 transition-colors mt-2">
+                                Delete Job
+                            </button>
+                        </div>
+
+                        <div class="mt-8 p-4 bg-[#222] border border-[#333] rounded-lg flex items-center gap-3 hidden"
+                            id="lock-msg">
+                            <div class="w-2 h-2 rounded-full bg-amber-500"></div>
+                            <span class="text-xs text-[#888]">Settings locked during processing</span>
+                        </div>
+                    </div>
+
+                    <!-- Empty State -->
+                    <div id="inspector-empty" class="flex-1 flex flex-col items-center justify-center text-[#444]">
+                        <div class="text-4xl mb-4 opacity-20">⚡️</div>
+                        <p class="text-xs font-medium uppercase tracking-wider">No Job Selected</p>
+                    </div>
+                </div>
+            </div>
+
+            <script>
+                // --- GLOBALS ---
+                let jobsData = [];
+                let selectedStem = null;
+                let currentTab = 'active'; // 'active' or 'completed'
+
+                // --- INIT ---
+                document.addEventListener('DOMContentLoaded', () => {
+                    fetchJobs();
+                    setInterval(fetchJobs, 2000);
+
+                    // Drag & Drop
+                    const dropZone = document.getElementById('drop-zone');
+                    const fileInput = document.getElementById('file-input');
+
+                    dropZone.addEventListener('click', () => fileInput.click());
+                    fileInput.addEventListener('change', handleFiles);
+
+                    // Prevent default drag behaviors on the window to avoid browser opening file
+                    ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
+                        window.addEventListener(eventName, preventDefaults, false);
+                        dropZone.addEventListener(eventName, preventDefaults, false);
+                    });
+
+                    function preventDefaults(e) {
+                        e.preventDefault();
+                        e.stopPropagation();
+                    }
+
+                    // Highlight drop zone
+                    ['dragenter', 'dragover'].forEach(eventName => {
+                        dropZone.addEventListener(eventName, highlight, false);
+                    });
+
+                    ['dragleave', 'drop'].forEach(eventName => {
+                        dropZone.addEventListener(eventName, unhighlight, false);
+                    });
+
+                    function highlight(e) {
+                        dropZone.classList.add('border-white', 'bg-[#222]');
+                    }
+
+                    function unhighlight(e) {
+                        dropZone.classList.remove('border-white', 'bg-[#222]');
+                    }
+
+                    dropZone.addEventListener('drop', handleDrop, false);
+
+                    function handleDrop(e) {
+                        const dt = e.dataTransfer;
+                        const files = dt.files;
+                        handleFiles({ files: files });
+                    }
+                });
+
+                // --- UTILS ---
+                function log(message) {
+                    const miniLog = document.getElementById('mini-log');
+                    if (!miniLog) return;
+                    const entry = document.createElement('div');
+                    entry.className = 'text-[#888]';
+                    entry.textContent = `[${new Date().toLocaleTimeString()}] ${message}`;
+                    miniLog.appendChild(entry);
+                    miniLog.scrollTop = miniLog.scrollHeight;
+                }
+
+                function switchTab(tab) {
+                    currentTab = tab;
+
+                    // Update Buttons
+                    const btnActive = document.getElementById('tab-active');
+                    const btnCompleted = document.getElementById('tab-completed');
+
+                    if (tab === 'active') {
+                        btnActive.className = "flex-1 py-3 text-[11px] font-bold uppercase tracking-wider text-white border-b-2 border-blue-500 bg-[#222]";
+                        btnCompleted.className = "flex-1 py-3 text-[11px] font-bold uppercase tracking-wider text-[#666] hover:text-[#aaa] border-b-2 border-transparent";
+                    } else {
+                        btnActive.className = "flex-1 py-3 text-[11px] font-bold uppercase tracking-wider text-[#666] hover:text-[#aaa] border-b-2 border-transparent";
+                        btnCompleted.className = "flex-1 py-3 text-[11px] font-bold uppercase tracking-wider text-white border-b-2 border-blue-500 bg-[#222]";
+                    }
+
+                    renderList();
+                }
+
+                async function handleFiles(filesOrEvent) {
+                    const files = filesOrEvent.files || filesOrEvent.target.files;
+                    if (!files.length) return;
+
+                    const formData = new FormData();
+                    formData.append('file', files[0]);
+
+                    try {
+                        log("Uploading " + files[0].name + "...");
+                        const res = await fetch('/api/upload', {
+                            method: 'POST',
+                            body: formData
+                        });
+                        const data = await res.json();
+                        if (data.success) {
+                            log("Upload Complete: " + files[0].name);
+                            fetchJobs();
+                        } else {
+                            log("Upload Failed: " + data.error);
+                        }
+                    } catch (err) {
+                        log("Upload Error: " + err);
+                    }
+                }
+
+
+                async function fetchJobs() {
+                    try {
+                        const res = await fetch('/api/jobs');
+                        jobsData = await res.json();
+                        renderList();
+                        if (selectedStem) updateInspector();
+                    } catch (err) {
+                        console.error(err);
+                    }
+                }
+
+                function calculateElapsed(job) {
+                    if (!job.meta || !job.meta.ingest_time) return "--:--";
+                    const start = new Date(job.meta.ingest_time);
+
+                    // FIX: Use burn_end_time if available to stop the timer
+                    let end = new Date();
+                    if (job.meta.burn_end_time) {
+                        end = new Date(job.meta.burn_end_time);
+                    } else if (job.stage === 'COMPLETED' || job.stage === 'PUBLISHED') {
+                        // Fallback if burn_end_time is missing but job is done
+                        end = new Date(job.updated_at);
+                    }
+
+                    const diffMs = end - start;
+                    const diffMins = Math.floor(diffMs / 60000);
+                    const diffSecs = Math.floor((diffMs % 60000) / 1000);
+                    return `${diffMins}m ${diffSecs}s`;
+                }
+
+                function renderList() {
+                    const tbody = document.getElementById('job-list');
+
+                    // Filter Jobs
+                    const filteredJobs = jobsData.filter(job => {
+                        const statusLower = job.status.toLowerCase();
+                        // Robust Completion Check: Completed OR Error OR Stalled
+                        const isDone = job.stage === 'COMPLETED' ||
+                            job.progress >= 100 ||
+                            statusLower.includes('done') ||
+                            statusLower.includes('completed') ||
+                            statusLower.includes('error') ||
+                            statusLower.includes('failed') ||
+                            statusLower.includes('stalled');
+
+                        if (currentTab === 'active') {
+                            return !isDone;
+                        } else {
+                            return isDone;
+                        }
+                    });
+
+                    // Sort: Active -> Newest First? Or Oldest First (FIFO)?
+                    // Usually Queue is FIFO (Oldest First).
+                    // Completed is Newest First.
+                    filteredJobs.sort((a, b) => {
+                        const dateA = new Date(a.updated_at || 0);
+                        const dateB = new Date(b.updated_at || 0);
+                        return currentTab === 'active' ? dateA - dateB : dateB - dateA;
+                    });
+
+                    tbody.innerHTML = filteredJobs.map(job => {
+                        const isSelected = job.file_stem === selectedStem;
+                        let statusIcon = '⚪️';
+                        if (job.status.includes('Error')) statusIcon = '🔴';
+                        else if (job.status.includes('Done')) statusIcon = '🟢';
+                        else if (job.status.includes('Waiting')) statusIcon = '🟡';
+                        else if (job.stage !== 'INGEST') statusIcon = '🔵';
+
+                        const elapsed = calculateElapsed(job);
+
+                        return `
+                <tr onclick="selectJob('${job.file_stem}')" class="cursor-pointer hover:bg-[#222] transition-colors border-b border-[#222] group ${isSelected ? 'bg-[#1a1a1a]' : ''}">
+                    <td class="p-4 text-xs">${statusIcon}</td>
+                    <td class="p-4 font-medium text-white group-hover:text-blue-400 transition-colors">${job.file_stem}</td>
+                    <td class="p-4 text-[#888] text-xs">${job.status}</td>
+                    <td class="p-4 text-[#666] text-xs font-mono">${elapsed}</td>
+                    <td class="p-4">
+                        <div class="w-full h-1 bg-[#333] rounded-full overflow-hidden">
+                            <div class="h-full bg-blue-500 transition-all duration-500" style="width: ${job.progress}%"></div>
+                        </div>
+                    </td>
+                </tr>
+            `;
+                    }).join('');
+                }
+
+                let selectedJobId = null;
+
+                function selectJob(jobId) {
+                    console.log(`Selected job: ${jobId}`);
+                    selectedJobId = jobId;
+                    selectedStem = jobId; // Sync selectedStem
+
+                    // Remove selected-row from previous selection
+                    document.querySelectorAll('#job-list tr').forEach(row => {
+                        row.classList.remove('selected-row');
+                    });
+
+                    // Add selected-row to current selection
+                    const selectedRow = document.querySelector(`#job-list tr[onclick*="${jobId}"]`);
+                    if (selectedRow) {
+                        selectedRow.classList.add('selected-row');
+                    }
+
+                    // Show inspector content and hide empty state
+                    document.getElementById('inspector-empty').classList.add('hidden');
+                    document.getElementById('inspector-content').classList.remove('hidden');
+
+                    updateInspector();
+                }
+
+                function updateInspector() {
+                    const job = jobsData.find(j => j.file_stem === selectedJobId);
+                    if (!job) return;
+
+                    document.getElementById('insp-title').innerText = job.file_stem;
+                    document.getElementById('insp-id').innerText = "Status: " + job.status;
+
+                    // Status Badge
+                    document.getElementById('insp-status-text').innerText = job.status;
+                    const statusDot = document.getElementById('insp-status-dot');
+                    if (job.status.includes('Error')) statusDot.className = "w-2 h-2 rounded-full bg-red-500";
+                    else if (job.status.includes('Done')) statusDot.className = "w-2 h-2 rounded-full bg-emerald-500";
+                    else if (job.status.includes('Pending Approval')) statusDot.className = "w-2 h-2 rounded-full bg-amber-500 animate-pulse";
+                    else statusDot.className = "w-2 h-2 rounded-full bg-blue-500 animate-pulse";
+
+                    // Stepper Logic
+                    const progress = job.progress;
+                    updateStep('ingest', progress >= 30, progress < 30 && progress > 0);
+                    updateStep('translate', progress >= 70, progress < 70 && progress >= 30);
+                    updateStep('burn', progress >= 100, progress < 100 && progress >= 70);
+
+                    // Update Inputs (Only if not focused to avoid jitter)
+                    if (document.activeElement.id !== 'insp-lang') document.getElementById('insp-lang').value = job.target_language || 'en';
+                    if (document.activeElement.id !== 'insp-style') document.getElementById('insp-style').value = job.subtitle_style || 'Modern';
+
+                    // Mode Buttons
+                    const mode = job.meta?.mode || 'AUTO';
+                    document.getElementById('btn-mode-auto').className = `flex-1 py-2 text-[11px] font-medium rounded-md transition-all ${mode === 'AUTO' ? 'bg-white text-black shadow-sm' : 'text-[#666] hover:text-white hover:bg-[#333]'}`;
+                    document.getElementById('btn-mode-review').className = `flex-1 py-2 text-[11px] font-medium rounded-md transition-all ${mode === 'REVIEW' ? 'bg-white text-black shadow-sm' : 'text-[#666] hover:text-white hover:bg-[#333]'}`;
+
+                    // Approve Button
+                    const btnApprove = document.getElementById('btn-approve');
+                    if (job.status === 'Pending Approval') {
+                        btnApprove.classList.remove('hidden');
+                        btnApprove.classList.add('animate-pulse');
+                    } else {
+                        btnApprove.classList.add('hidden');
+                        btnApprove.classList.remove('animate-pulse');
+                    }
+
+                    // Locking Logic
+                    const isLocked = job.stage === 'Completed' || job.stage === 'Failed';
+                    updateInspectorState(isLocked);
+
+                    // Quality Report Logic
+                    const reportDiv = document.getElementById('quality-report');
+                    if (job.editor_report) {
+                        try {
+                            const report = JSON.parse(job.editor_report);
+                            reportDiv.classList.remove('hidden');
+
+                            // Rating Color
+                            const rating = report.rating || 0;
+                            const ratingEl = document.getElementById('qr-rating');
+                            ratingEl.innerText = rating + "/10";
+                            if (rating >= 9) ratingEl.className = "px-2 py-1 rounded bg-emerald-500/20 text-emerald-400 text-xs font-bold";
+                            else if (rating >= 7) ratingEl.className = "px-2 py-1 rounded bg-yellow-500/20 text-yellow-400 text-xs font-bold";
+                            else ratingEl.className = "px-2 py-1 rounded bg-red-500/20 text-red-400 text-xs font-bold";
+
+                            document.getElementById('qr-tier').innerText = report.quality_tier || "Unknown";
+                            document.getElementById('qr-summary').innerText = report.summary || "No summary available.";
+
+                            // Issues
+                            const issuesContainer = document.getElementById('qr-issues-container');
+                            const issuesList = document.getElementById('qr-issues');
+                            if (report.major_issues && report.major_issues.length > 0) {
+                                issuesContainer.classList.remove('hidden');
+                                issuesList.innerHTML = report.major_issues.map(i => `<li>${i}</li>`).join('');
+                            } else {
+                                issuesContainer.classList.add('hidden');
+                            }
+
+                            // Suggestions
+                            const suggContainer = document.getElementById('qr-suggestions-container');
+                            if (report.suggestions) {
+                                suggContainer.classList.remove('hidden');
+                                document.getElementById('qr-suggestions').innerText = report.suggestions;
+                            } else {
+                                suggContainer.classList.add('hidden');
+                            }
+
+                        } catch (e) {
+                            console.error("Failed to parse editor report", e);
+                            reportDiv.classList.add('hidden');
+                        }
+                    } else {
+                        reportDiv.classList.add('hidden');
+                    }
+                }
+
+                function updateStep(id, isComplete, isActive) {
+                    const dot = document.getElementById(`step-${id}-dot`);
+                    const inner = document.getElementById(`step-${id}-inner`);
+                    const text = document.getElementById(`step-${id}-text`);
+
+                    if (isComplete) {
+                        dot.className = "absolute -left-[13px] w-6 h-6 rounded-full bg-emerald-500/20 border border-emerald-500 flex items-center justify-center z-10";
+                        inner.className = "w-2 h-2 rounded-full bg-emerald-500";
+                        text.className = "text-xs text-white font-medium ml-6";
+                    } else if (isActive) {
+                        dot.className = "absolute -left-[13px] w-6 h-6 rounded-full bg-blue-500/20 border border-blue-500 flex items-center justify-center z-10 animate-pulse";
+                        inner.className = "w-2 h-2 rounded-full bg-blue-500";
+                        text.className = "text-xs text-white font-medium ml-6";
+                    } else {
+                        dot.className = "absolute -left-[13px] w-6 h-6 rounded-full bg-[#1a1a1a] border border-[#333] flex items-center justify-center z-10";
+                        inner.className = "w-1.5 h-1.5 rounded-full bg-[#444]";
+                        text.className = "text-xs text-[#666] ml-6";
+                    }
+                }
+
+                async function deleteJob() {
+                    if (!selectedJobId) return;
+                    if (!confirm(`Are you sure you want to delete ${selectedJobId}? This cannot be undone.`)) return;
+
+                    try {
+                        const res = await fetch('/api/action', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                                action: 'delete_job',
+                                file_stem: selectedJobId
+                            })
+                        });
+                        const data = await res.json();
+                        if (data.success) {
+                            log(`Deleted job ${selectedJobId}`);
+                            selectedJobId = null;
+                            selectedStem = null;
+                            document.getElementById('inspector-content').classList.add('hidden');
+                            document.getElementById('inspector-empty').classList.remove('hidden');
+                            fetchJobs();
+                        } else {
+                            log(`Error deleting job: ${data.error}`);
+                        }
+                    } catch (err) {
+                        log(`Network Error: ${err}`);
+                    }
+                }
+
+                function approveBurn() {
+                    console.log(`Approving burn for job ${selectedJobId}`);
+                }
+
+                function resetReview() {
+                    console.log(`Resetting review for job ${selectedJobId}`);
+                }
+
+                function forceBurn() {
+                    console.log(`Forcing burn for job ${selectedJobId}`);
+                }
+
+                function updateInspectorState(locked) {
+                    const inspectorContent = document.getElementById('inspector-content');
+                    const lockMsg = document.getElementById('lock-msg');
+                    const settings = inspectorContent.querySelectorAll('select, button:not(#btn-approve):not(#btn-mode-auto):not(#btn-mode-review)');
+
+                    if (locked) {
+                        lockMsg.classList.remove('hidden');
+                        settings.forEach(el => el.setAttribute('disabled', 'true'));
+                    } else {
+                        lockMsg.classList.add('hidden');
+                        settings.forEach(el => el.removeAttribute('disabled'));
+                    }
+                }
+            </script>
+            <!-- Surgical Tool Modal -->
+            <div id="surgical-modal" class="fixed inset-0 bg-black/90 z-50 hidden flex flex-col">
+                <!-- Header -->
+                <div class="h-14 border-b border-[#333] flex items-center justify-between px-6 bg-[#1a1a1a]">
+                    <div class="flex items-center gap-4">
+                        <h2 class="text-white font-bold tracking-wider">SURGICAL EDITOR 🩺</h2>
+                        <span id="surgical-filename" class="text-[#666] text-xs font-mono"></span>
+                    </div>
+                    <div class="flex items-center gap-3">
+                        <button onclick="closeSurgical()"
+                            class="text-[#888] hover:text-white text-xs uppercase font-bold tracking-wider px-4 py-2">Cancel</button>
+                        <button onclick="saveSurgical()"
+                            class="bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold uppercase tracking-wider px-6 py-2 rounded-md shadow-lg shadow-emerald-900/20 transition-all">Save
+                            & Polish</button>
+                    </div>
+                </div>
+
+                <!-- Editor Area -->
+                <div class="flex-1 overflow-y-auto p-6">
+                    <div class="max-w-5xl mx-auto">
+                        <div id="surgical-editor" class="space-y-1">
+                            <!-- Segments injected here -->
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <script>
+                // ... Existing Scripts ...
+
+                // Surgical Tool Logic
+                let currentSegments = [];
+                let currentStem = null;
+
+                async function openSurgical() {
+                    if (!selectedJobId) return;
+                    currentStem = selectedJobId;
+                    document.getElementById('surgical-filename').innerText = currentStem;
+
+                    // Show Modal
+                    document.getElementById('surgical-modal').classList.remove('hidden');
+                    document.getElementById('surgical-editor').innerHTML = '<div class="text-center text-[#666] py-20">Loading segments...</div>';
+
+                    try {
+                        const res = await fetch(`/api/surgical/segments?stem=${currentStem}`);
+                        const data = await res.json();
+
+                        if (data.error) throw new Error(data.error);
+
+                        currentSegments = data.segments;
+                        renderSegments();
+
+                    } catch (e) {
+                        alert("Failed to load segments: " + e.message);
+                        closeSurgical();
+                    }
+                }
+
+                function closeSurgical() {
+                    document.getElementById('surgical-modal').classList.add('hidden');
+                    currentSegments = [];
+                    currentStem = null;
+                }
+
+                function renderSegments() {
+                    const container = document.getElementById('surgical-editor');
+                    container.innerHTML = '';
+
+                    currentSegments.forEach((seg, index) => {
+                        const row = document.createElement('div');
+                        row.className = "flex gap-4 group bg-[#222] hover:bg-[#2a2a2a] border border-[#333] rounded p-3 transition-colors";
+                        row.innerHTML = `
+                    <div class="w-24 text-[10px] font-mono text-[#666] pt-1.5 flex flex-col gap-1">
+                        <div>${formatTime(seg.start)}</div>
+                        <div>${formatTime(seg.end)}</div>
+                        <div class="text-[#444]">#${seg.id}</div>
+                    </div>
+                    
+                    <!-- Source Text -->
+                    <div class="flex-1 text-sm text-[#888] italic font-serif leading-relaxed px-4 border-r border-[#333]">
+                        ${seg.source_text || '<span class="opacity-30">No source</span>'}
+                    </div>
+
+                    <div class="flex-1 pl-4">
+                        <textarea 
+                            oninput="updateSegment(${index}, this.value)"
+                            class="w-full bg-transparent text-white text-sm font-medium outline-none resize-none border-none p-0 leading-relaxed h-auto overflow-hidden"
+                            rows="2"
+                        >${seg.text}</textarea>
+                    </div>
+                    <div class="w-8 flex items-start justify-end opacity-0 group-hover:opacity-100 transition-opacity">
+                        <button onclick="deleteSegment(${index})" class="text-[#666] hover:text-red-400 p-1">
+                            ✕
+                        </button>
+                    </div>
+                `;
+                        container.appendChild(row);
+
+                        // Auto-resize textarea
+                        const ta = row.querySelector('textarea');
+                        ta.style.height = 'auto';
+                        ta.style.height = ta.scrollHeight + 'px';
+                    });
+                }
+
+                function updateSegment(index, value) {
+                    currentSegments[index].text = value;
+                }
+
+                function deleteSegment(index) {
+                    if (confirm("Delete this segment?")) {
+                        currentSegments.splice(index, 1);
+                        renderSegments();
+                    }
+                }
+
+                async function saveSurgical() {
+                    const btn = document.querySelector('button[onclick="saveSurgical()"]');
+                    const originalText = btn.innerText;
+                    btn.innerText = "Polishing...";
+                    btn.disabled = true;
+
+                    try {
+                        const res = await fetch('/api/surgical/save', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                                stem: currentStem,
+                                segments: currentSegments
+                            })
+                        });
+
+                        const data = await res.json();
+                        if (data.error) throw new Error(data.error);
+
+                        closeSurgical();
+                        showSaved(); // Reuse existing toast
+
+                    } catch (e) {
+                        alert("Save failed: " + e.message);
+                    } finally {
+                        btn.innerText = originalText;
+                        btn.disabled = false;
+                    }
+                }
+
+                function formatTime(seconds) {
+                    const date = new Date(seconds * 1000);
+                    return date.toISOString().substr(11, 8);
+                }
+            </script>
+</body>
+
+</html>

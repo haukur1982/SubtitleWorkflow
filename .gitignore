@@ -1,0 +1,40 @@
+# System
+.DS_Store
+__pycache__/
+*.py[cod]
+*$py.class
+.env
+.venv
+env/
+venv/
+
+# Secrets (CRITICAL)
+service_account.json
+credentials.json
+
+# Database (Local State)
+omega.db
+*.sqlite3
+
+# Logs
+logs/
+*.log
+
+# Media & Workflow Folders (Too large for Git)
+1_INBOX/
+2_VAULT/
+3_EDITOR/
+3_TRANSLATED_DONE/
+4_DELIVERY/
+99_ERRORS/
+
+# Temporary/Output Files
+*.mp4
+*.mov
+*.wav
+*.mp3
+*.srt
+*.ass
+*.json
+!*_SKELETON.json
+!*_APPROVED.json

@@ -1,0 +1,9 @@
+flask
+google-generativeai
+whisperx
+torch
+torchaudio
+ffmpeg-python
+psutil
+requests
+werkzeug
