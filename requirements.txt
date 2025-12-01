@@ -1,9 +1,5 @@
 flask
-google-generativeai
-whisperx
-torch
-torchaudio
-ffmpeg-python
-psutil
+google-cloud-translate
+openai
 requests
-werkzeug
+python-dotenv
