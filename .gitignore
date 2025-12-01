@@ -15,6 +15,7 @@ credentials.json
 # Database (Local State)
 omega.db
 *.sqlite3
+*.db
 
 # Logs
 logs/

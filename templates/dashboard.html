@@ -741,10 +741,27 @@
                 </div>
 
                 <!-- Editor Area -->
-                <div class="flex-1 overflow-y-auto p-6">
-                    <div class="max-w-5xl mx-auto">
-                        <div id="surgical-editor" class="space-y-1">
-                            <!-- Segments injected here -->
+                <div class="flex-1 flex overflow-hidden">
+                    <!-- Video Preview -->
+                    <div class="w-[400px] bg-black border-r border-[#333] flex flex-col">
+                        <div class="aspect-video bg-black relative">
+                            <video id="surgical-video" class="w-full h-full object-contain" controls></video>
+                            <div id="video-placeholder"
+                                class="absolute inset-0 flex items-center justify-center text-[#444] text-xs">
+                                No Preview Available
+                            </div>
+                        </div>
+                        <div class="p-4 text-xs text-[#666] font-mono">
+                            <p>Click a subtitle to jump to time.</p>
+                        </div>
+                    </div>
+
+                    <!-- Subtitles -->
+                    <div class="flex-1 overflow-y-auto p-6">
+                        <div class="max-w-4xl mx-auto">
+                            <div id="surgical-editor" class="space-y-1">
+                                <!-- Segments injected here -->
+                            </div>
                         </div>
                     </div>
                 </div>
@@ -765,6 +782,19 @@
                     // Show Modal
                     document.getElementById('surgical-modal').classList.remove('hidden');
                     document.getElementById('surgical-editor').innerHTML = '<div class="text-center text-[#666] py-20">Loading segments...</div>';
+
+                    // Load Video
+                    const video = document.getElementById('surgical-video');
+                    const placeholder = document.getElementById('video-placeholder');
+                    video.src = `/api/stream/${currentStem}`;
+                    video.onerror = () => {
+                        video.classList.add('hidden');
+                        placeholder.classList.remove('hidden');
+                    };
+                    video.onloadeddata = () => {
+                        video.classList.remove('hidden');
+                        placeholder.classList.add('hidden');
+                    };
 
                     try {
                         const res = await fetch(`/api/surgical/segments?stem=${currentStem}`);
@@ -793,7 +823,16 @@
 
                     currentSegments.forEach((seg, index) => {
                         const row = document.createElement('div');
-                        row.className = "flex gap-4 group bg-[#222] hover:bg-[#2a2a2a] border border-[#333] rounded p-3 transition-colors";
+                        row.className = "flex gap-4 group bg-[#222] hover:bg-[#2a2a2a] border border-[#333] rounded p-3 transition-colors cursor-pointer";
+                        row.onclick = (e) => {
+                            // Don't seek if clicking textarea or button
+                            if (e.target.tagName === 'TEXTAREA' || e.target.tagName === 'BUTTON') return;
+                            const video = document.getElementById('surgical-video');
+                            if (video) {
+                                video.currentTime = seg.start;
+                                video.play();
+                            }
+                        };
                         row.innerHTML = `
                     <div class="w-24 text-[10px] font-mono text-[#666] pt-1.5 flex flex-col gap-1">
                         <div>${formatTime(seg.start)}</div>
@@ -809,6 +848,7 @@
                     <div class="flex-1 pl-4">
                         <textarea 
                             oninput="updateSegment(${index}, this.value)"
+                            onfocus="seekVideo(${seg.start})"
                             class="w-full bg-transparent text-white text-sm font-medium outline-none resize-none border-none p-0 leading-relaxed h-auto overflow-hidden"
                             rows="2"
                         >${seg.text}</textarea>
@@ -872,6 +912,14 @@
                 function formatTime(seconds) {
                     const date = new Date(seconds * 1000);
                     return date.toISOString().substr(11, 8);
+                }
+
+                function seekVideo(time) {
+                    const video = document.getElementById('surgical-video');
+                    if (video) {
+                        video.currentTime = time;
+                        // Optional: video.play();
+                    }
                 }
             </script>
 </body>

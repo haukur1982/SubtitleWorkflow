@@ -1,4 +1,4 @@
-from flask import Flask, render_template, jsonify, request
+from flask import Flask, render_template, jsonify, request, send_file
 import sqlite3
 import json
 import shutil
@@ -172,6 +172,18 @@ def get_segments():
                 return jsonify({"error": str(e)}), 500
                 
     return jsonify({"error": "No editable file found"}), 404
+
+@app.route('/api/stream/<stem>')
+def stream_proxy(stem):
+    """Streams the proxy video if it exists."""
+    proxy_path = config.PROXIES_DIR / f"{stem}_PROXY.mp4"
+    if not proxy_path.exists():
+        return "Proxy not found", 404
+        
+    # Simple file serving for now (Flask handles range requests automatically with send_file usually, 
+    # but for true seeking we might need a more robust solution later. 
+    # For local dev, send_file is often enough).
+    return send_file(proxy_path, mimetype='video/mp4')
 
 @app.route('/api/surgical/save', methods=['POST'])
 def save_segments():
