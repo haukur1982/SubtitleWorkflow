@@ -38,3 +38,4 @@ logs/
 *.json
 !*_SKELETON.json
 !*_APPROVED.json
+*.zip
