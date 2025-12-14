@@ -3,7 +3,9 @@ import sqlite3
 import json
 import shutil
 import time
+import threading
 from pathlib import Path
+from datetime import datetime
 from werkzeug.utils import secure_filename
 import omega_db
 import subprocess
@@ -15,6 +17,9 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("Dashboard")
 
 app = Flask(__name__)
+
+_force_burn_lock = threading.Lock()
+_force_burn_inflight = set()
 
 def get_all_jobs():
     """Fetch all jobs from the database."""
@@ -34,6 +39,125 @@ def get_all_jobs():
             job["meta"] = {}
         jobs.append(job)
     return jobs
+
+_VIDEO_EXTS = {".mp4", ".mov", ".mkv", ".avi", ".webm", ".mpg", ".mpeg", ".m4v", ".wmv", ".flv"}
+
+def _resolve_vault_video(vault_dir: Path, stem: str) -> Path:
+    candidates = []
+    for path in vault_dir.glob(f"{stem}.*"):
+        if path.name.startswith("._"):
+            continue
+        if path.suffix.lower() in _VIDEO_EXTS:
+            candidates.append(path)
+    if not candidates:
+        raise FileNotFoundError(f"Video not found in vault for {stem}: {vault_dir}")
+    # Prefer mp4 when multiple candidates exist.
+    candidates.sort(key=lambda p: (p.suffix.lower() != ".mp4", p.name.lower()))
+    return candidates[0]
+
+
+def _derive_delivery_dir_from_vault(vault_dir: Path) -> Path:
+    """
+    Map `2_VAULT/<client>/<year>/<stem>` → `4_DELIVERY/<client>/<year>/<stem>`.
+    Falls back to `4_DELIVERY/VIDEO` if the vault dir isn't under `config.VAULT_DIR`.
+    """
+    try:
+        rel = vault_dir.resolve(strict=False).relative_to(config.VAULT_DIR.resolve(strict=False))
+        return config.DELIVERY_DIR / rel
+    except Exception:
+        return config.DELIVERY_DIR / "VIDEO"
+
+
+def _run_force_burn(file_stem: str):
+    """
+    Background burn task kicked off by the dashboard.
+    Uses the job's `vault_path` (queue-system layout) when available.
+    """
+    try:
+        logger.info(f"🔥 Force burn started: {file_stem}")
+        job = omega_db.get_job(file_stem) or {}
+
+        meta = job.get("meta", {}) or {}
+
+        vault_path = job.get("vault_path") or meta.get("vault_path")
+        vault_dir = Path(vault_path) if vault_path else None
+
+        delivery_dir = _derive_delivery_dir_from_vault(vault_dir) if vault_dir else config.VIDEO_DIR
+        delivery_dir.mkdir(parents=True, exist_ok=True)
+
+        # Resolve SRT (prefer delivery; otherwise copy from vault; legacy fallback to SRT_DIR)
+        srt_path = None
+        delivery_srt = delivery_dir / f"{file_stem}.srt"
+        if delivery_srt.exists():
+            srt_path = delivery_srt
+        if srt_path is None and vault_dir is not None:
+            vault_srt = vault_dir / f"{file_stem}.srt"
+            if vault_srt.exists():
+                shutil.copy2(vault_srt, delivery_srt)
+                srt_path = delivery_srt
+        if srt_path is None:
+            legacy_srt = config.SRT_DIR / f"{file_stem}.srt"
+            if legacy_srt.exists():
+                srt_path = legacy_srt
+        if srt_path is None:
+            raise FileNotFoundError(f"SRT not found for {file_stem}")
+
+        # Resolve video (prefer vault_path; legacy fallback to VAULT_VIDEOS)
+        video_path = _resolve_vault_video(vault_dir, file_stem) if vault_dir else None
+        if video_path is None:
+            original_filename = meta.get("original_filename")
+            if original_filename:
+                candidate = config.VAULT_VIDEOS / original_filename
+                if candidate.exists():
+                    video_path = candidate
+        if video_path is None:
+            for candidate in config.VAULT_VIDEOS.glob(f"{file_stem}.*"):
+                if candidate.name.startswith("._"):
+                    continue
+                if candidate.suffix.lower() in _VIDEO_EXTS:
+                    video_path = candidate
+                    break
+        if video_path is None:
+            source_path = meta.get("source_path")
+            raise FileNotFoundError(f"Video not found for {file_stem} (source_path={source_path})")
+
+        subtitle_style = job.get("subtitle_style") or meta.get("subtitle_style") or "Classic"
+        logger.info(f"   Video: {video_path}")
+        logger.info(f"   SRT: {srt_path}")
+        logger.info(f"   Style: {subtitle_style}")
+        logger.info(f"   Output dir: {delivery_dir}")
+
+        omega_db.update(
+            file_stem,
+            stage="BURNING",
+            status="Burning",
+            progress=95.0,
+            meta={"burn_started_at": datetime.now().isoformat(), "burn_requested_via": "dashboard"},
+        )
+
+        from workers import publisher
+        output_path = publisher.publish(video_path, srt_path, subtitle_style=subtitle_style, output_dir=delivery_dir)
+        logger.info(f"✅ Force burn complete: {output_path}")
+
+        omega_db.update(
+            file_stem,
+            stage="COMPLETED",
+            status="Done",
+            progress=100.0,
+            meta={"burn_completed_at": datetime.now().isoformat(), "final_output": str(output_path)},
+        )
+    except Exception as e:
+        logger.error(f"Force burn failed for {file_stem}: {e}", exc_info=True)
+        omega_db.update(
+            file_stem,
+            stage="FINALIZED",
+            status=f"Burn Failed: {e}",
+            progress=90.0,
+            meta={"burn_failed_at": datetime.now().isoformat()},
+        )
+    finally:
+        with _force_burn_lock:
+            _force_burn_inflight.discard(file_stem)
 
 @app.route('/')
 def index():
@@ -60,9 +184,22 @@ def api_action():
         return jsonify({"success": True, "message": f"Reset {file_stem} to Review"})
         
     elif action == "force_burn":
-        # Reset to FINALIZED stage (triggers Publisher)
-        omega_db.update(file_stem, stage="FINALIZED", status="Manual Burn", progress=80.0)
-        return jsonify({"success": True, "message": f"Triggered Burn for {file_stem}"})
+        with _force_burn_lock:
+            if file_stem in _force_burn_inflight:
+                return jsonify({"success": True, "message": f"Burn already running for {file_stem}"}), 200
+            _force_burn_inflight.add(file_stem)
+
+        omega_db.update(
+            file_stem,
+            stage="FINALIZED",
+            status="Manual Burn (Queued)",
+            progress=90.0,
+            meta={"burn_requested_at": datetime.now().isoformat()},
+        )
+
+        t = threading.Thread(target=_run_force_burn, args=(file_stem,), name=f"force_burn_{file_stem}", daemon=True)
+        t.start()
+        return jsonify({"success": True, "message": f"Queued burn for {file_stem}"})
         
     elif action == "remove_lyrics":
         return jsonify({"success": False, "message": "Not implemented yet"}), 501

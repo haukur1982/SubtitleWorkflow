@@ -697,16 +697,65 @@
                     }
                 }
 
-                function approveBurn() {
-                    console.log(`Approving burn for job ${selectedJobId}`);
+                async function approveBurn() {
+                    if (!selectedJobId) return;
+                    try {
+                        const res = await fetch('/api/action', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ action: 'approve_burn', file_stem: selectedJobId })
+                        });
+                        const data = await res.json();
+                        if (data.success) {
+                            log(data.message || `Burn approved for ${selectedJobId}`);
+                            fetchJobs();
+                        } else {
+                            log(`Error approving burn: ${data.error || data.message || 'Unknown error'}`);
+                        }
+                    } catch (err) {
+                        log(`Network Error: ${err}`);
+                    }
                 }
 
-                function resetReview() {
-                    console.log(`Resetting review for job ${selectedJobId}`);
+                async function resetReview() {
+                    if (!selectedJobId) return;
+                    try {
+                        const res = await fetch('/api/action', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ action: 'reset_review', file_stem: selectedJobId })
+                        });
+                        const data = await res.json();
+                        if (data.success) {
+                            log(data.message || `Reset queued for ${selectedJobId}`);
+                            fetchJobs();
+                        } else {
+                            log(`Error resetting job: ${data.error || data.message || 'Unknown error'}`);
+                        }
+                    } catch (err) {
+                        log(`Network Error: ${err}`);
+                    }
                 }
 
-                function forceBurn() {
-                    console.log(`Forcing burn for job ${selectedJobId}`);
+                async function forceBurn() {
+                    if (!selectedJobId) return;
+                    if (!confirm(`Force burn ${selectedJobId}? This will re-render the burned video.`)) return;
+                    try {
+                        const res = await fetch('/api/action', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ action: 'force_burn', file_stem: selectedJobId })
+                        });
+                        const data = await res.json();
+                        if (data.success) {
+                            log(data.message || `Burn triggered for ${selectedJobId}`);
+                            fetchJobs();
+                        } else {
+                            log(`Error force burning: ${data.error || data.message || 'Unknown error'}`);
+                        }
+                    } catch (err) {
+                        log(`Network Error: ${err}`);
+                    }
                 }
 
                 function updateInspectorState(locked) {

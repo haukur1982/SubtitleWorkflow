@@ -61,7 +61,7 @@ def adjust_ass_time(time_str, delta_ms):
     new_cs = (rem % 1000) // 10
     return f"{new_h}:{new_m:02d}:{new_s:02d}.{new_cs:02d}"
 
-def publish(video_path: Path, srt_path: Path, subtitle_style: str = "Classic"):
+def publish(video_path: Path, srt_path: Path, subtitle_style: str = "Classic", output_dir: Path = None):
     """
     Burns subtitles into video using the specified style.
     Styles: "Classic" (RuvBox), "Modern" (Default/Shadow).
@@ -72,7 +72,9 @@ def publish(video_path: Path, srt_path: Path, subtitle_style: str = "Classic"):
         raise FileNotFoundError(f"SRT not found: {srt_path}")
 
     stem = video_path.stem.replace("_SUBBED", "") # careful if re-burning
-    output_dir = config.DELIVERY_DIR / "VIDEO"
+    if output_dir is None:
+        output_dir = config.DELIVERY_DIR / "VIDEO"
+    output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     
     output_path = output_dir / f"{stem}_SUBBED.mp4"
