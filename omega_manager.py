@@ -291,6 +291,59 @@ def process_jobs(executor):
                 prefix = str(meta.get("cloud_prefix") or config.OMEGA_JOBS_PREFIX).strip()
                 paths = GcsJobPaths(bucket=bucket_name, prefix=prefix, job_id=str(cloud_job_id))
 
+                # If Cloud Run auto-trigger is configured, retry triggering any submitted jobs
+                # that don't have an execution recorded yet (e.g., first-time setup).
+                cloud_run_job = getattr(config, "OMEGA_CLOUD_RUN_JOB", "").strip()
+                cloud_run_region = getattr(config, "OMEGA_CLOUD_RUN_REGION", "us-central1").strip() or "us-central1"
+                cloud_run_project = getattr(config, "OMEGA_CLOUD_PROJECT", "").strip() or None
+                if (
+                    cloud_run_job
+                    and stage == "TRANSLATING_CLOUD_SUBMITTED"
+                    and not meta.get("cloud_run_execution")
+                ):
+                    now = time.time()
+                    attempts = int(meta.get("cloud_trigger_attempts") or 0)
+                    last_attempt = float(meta.get("cloud_trigger_last_attempt") or 0.0)
+                    backoff = min(2 ** max(0, attempts), 300.0)
+                    if now - last_attempt >= backoff:
+                        omega_db.update(stem, status="Triggering cloud worker…")
+                        args = [
+                            "--job-id",
+                            str(cloud_job_id),
+                            "--bucket",
+                            bucket_name,
+                            "--prefix",
+                            prefix,
+                        ]
+                        try:
+                            resp = run_cloud_run_job(
+                                job_name=cloud_run_job,
+                                region=cloud_run_region,
+                                project=cloud_run_project,
+                                args=args,
+                            )
+                            omega_db.update(
+                                stem,
+                                status="Cloud worker started",
+                                meta={
+                                    "cloud_run_execution": resp.get("name"),
+                                    "cloud_triggered_at": datetime.now().isoformat(),
+                                    "cloud_trigger_attempts": attempts,
+                                    "cloud_trigger_last_attempt": now,
+                                },
+                            )
+                        except Exception as e:
+                            omega_db.update(
+                                stem,
+                                status=f"Cloud trigger failed: {e}",
+                                meta={
+                                    "cloud_trigger_error": str(e),
+                                    "cloud_trigger_failed_at": datetime.now().isoformat(),
+                                    "cloud_trigger_attempts": attempts + 1,
+                                    "cloud_trigger_last_attempt": now,
+                                },
+                            )
+
                 # Optional: reflect cloud progress into the dashboard.
                 try:
                     if blob_exists(storage_client, bucket_name, paths.progress_json()):
@@ -575,17 +628,31 @@ def _run_translate_cloud(skel, stem, target_language):
             prefix,
         ]
         logger.info("🚀 Triggering Cloud Run job: %s (%s)", cloud_run_job, cloud_run_region)
-        resp = run_cloud_run_job(
-            job_name=cloud_run_job,
-            region=cloud_run_region,
-            project=cloud_run_project,
-            args=args,
-        )
-        omega_db.update(
-            stem,
-            status="Cloud worker started",
-            meta={"cloud_run_execution": resp.get("name")},
-        )
+        try:
+            resp = run_cloud_run_job(
+                job_name=cloud_run_job,
+                region=cloud_run_region,
+                project=cloud_run_project,
+                args=args,
+            )
+            omega_db.update(
+                stem,
+                status="Cloud worker started",
+                meta={
+                    "cloud_run_execution": resp.get("name"),
+                    "cloud_triggered_at": datetime.now().isoformat(),
+                },
+            )
+        except Exception as e:
+            logger.error("❌ Cloud Run trigger failed for %s: %s", stem, e)
+            omega_db.update(
+                stem,
+                status=f"Cloud trigger failed: {e}",
+                meta={
+                    "cloud_trigger_error": str(e),
+                    "cloud_trigger_failed_at": datetime.now().isoformat(),
+                },
+            )
         return
 
     trigger = str(os.environ.get("OMEGA_CLOUD_TRIGGER_COMMAND") or "").strip()
