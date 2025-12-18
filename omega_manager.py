@@ -13,6 +13,7 @@ import omega_db
 import system_health
 from gcp_auth import ensure_google_application_credentials
 from gcs_jobs import GcsJobPaths, new_job_id, upload_json, download_json, blob_exists
+from cloud_run_jobs import run_cloud_run_job
 from lock_manager import ProcessLock
 from concurrent.futures import ThreadPoolExecutor
 from google.cloud import storage
@@ -560,10 +561,37 @@ def _run_translate_cloud(skel, stem, target_language):
         },
     )
 
+    cloud_run_job = getattr(config, "OMEGA_CLOUD_RUN_JOB", "").strip()
+    cloud_run_region = getattr(config, "OMEGA_CLOUD_RUN_REGION", "us-central1").strip() or "us-central1"
+    cloud_run_project = getattr(config, "OMEGA_CLOUD_PROJECT", "").strip() or None
+
+    if cloud_run_job:
+        args = [
+            "--job-id",
+            job_id,
+            "--bucket",
+            bucket_name,
+            "--prefix",
+            prefix,
+        ]
+        logger.info("🚀 Triggering Cloud Run job: %s (%s)", cloud_run_job, cloud_run_region)
+        resp = run_cloud_run_job(
+            job_name=cloud_run_job,
+            region=cloud_run_region,
+            project=cloud_run_project,
+            args=args,
+        )
+        omega_db.update(
+            stem,
+            status="Cloud worker started",
+            meta={"cloud_run_execution": resp.get("name")},
+        )
+        return
+
     trigger = str(os.environ.get("OMEGA_CLOUD_TRIGGER_COMMAND") or "").strip()
     if trigger:
         cmd = trigger.format(job_id=job_id, bucket=bucket_name, prefix=prefix)
-        logger.info("🚀 Triggering cloud worker: %s", cmd)
+        logger.info("🚀 Triggering cloud worker command: %s", cmd)
         subprocess.run(cmd, shell=True, check=True)
 
 def _run_review(trans, stem):

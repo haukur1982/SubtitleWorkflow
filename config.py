@@ -125,6 +125,12 @@ GEMINI_LOCATION = "global"                 # Required for Preview models
 OMEGA_JOBS_BUCKET = os.environ.get("OMEGA_JOBS_BUCKET", "omega-jobs-subtitle-project")
 OMEGA_JOBS_PREFIX = os.environ.get("OMEGA_JOBS_PREFIX", "jobs")
 
+# Optional: when set, the local manager will trigger a Cloud Run Job execution
+# automatically after uploading job artifacts to GCS (no manual worker run).
+OMEGA_CLOUD_RUN_JOB = os.environ.get("OMEGA_CLOUD_RUN_JOB", "").strip()
+OMEGA_CLOUD_RUN_REGION = os.environ.get("OMEGA_CLOUD_RUN_REGION", "us-central1").strip() or "us-central1"
+OMEGA_CLOUD_PROJECT = os.environ.get("OMEGA_CLOUD_PROJECT", "").strip()
+
 # Style Map
 STYLE_MAP = {
     "Joyce Meyer": "RUV_BOX",

@@ -85,6 +85,42 @@ Example (local trigger; not recommended for production, but useful for debugging
 export OMEGA_CLOUD_TRIGGER_COMMAND='python3 omega_cloud_worker.py --job-id {job_id} --bucket {bucket} --prefix {prefix}'
 ```
 
+## Recommended: auto-trigger via Cloud Run Jobs (no `gcloud` on the Mac)
+
+If you deploy the worker as a Cloud Run Job, the local manager can trigger executions
+directly via the Cloud Run API (using your `service_account.json`) — no manual steps per job.
+
+### 1) Deploy Cloud Run Job (one-time)
+Run these in **Cloud Shell** (recommended) or any environment with `gcloud`:
+
+```bash
+PROJECT_ID=sermon-translator-system
+REGION=us-central1
+IMAGE=gcr.io/$PROJECT_ID/omega-cloud-worker
+
+gcloud config set project "$PROJECT_ID"
+
+gcloud builds submit --file cloud/Dockerfile --tag "$IMAGE" .
+
+gcloud run jobs create omega-cloud-worker \
+  --image "$IMAGE" \
+  --region "$REGION" \
+  --service-account ranslator-bot@sermon-translator-system.iam.gserviceaccount.com \
+  --set-env-vars OMEGA_JOBS_BUCKET=omega-jobs-subtitle-project,OMEGA_JOBS_PREFIX=jobs
+```
+
+### 2) Grant the local service account permission to run the job
+In IAM, grant `ranslator-bot@sermon-translator-system.iam.gserviceaccount.com`:
+- `roles/run.admin` (simplest) or at least a role that includes `run.jobs.run`.
+
+### 3) Enable automatic triggering (local Mac)
+Set:
+- `OMEGA_CLOUD_RUN_JOB=omega-cloud-worker`
+- `OMEGA_CLOUD_RUN_REGION=us-central1`
+- (optional) `OMEGA_CLOUD_PROJECT=sermon-translator-system`
+
+Then start: `OMEGA_CLOUD_PIPELINE=1 sh start_omega.sh`
+
 ## Deploying to Cloud Run Jobs (recommended)
 
 Run the **container** in `us-central1` while still calling Vertex with `location="global"` (preview models).
@@ -119,4 +155,3 @@ gcloud run jobs execute omega-cloud-worker --region us-central1 --args="--job-id
 ```
 
 Then the local manager will detect `approved.json` and continue finalize/burn.
-
