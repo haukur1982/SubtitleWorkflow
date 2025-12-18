@@ -7,7 +7,7 @@ from google.auth.transport.requests import AuthorizedSession
 from gcp_auth import ensure_google_application_credentials
 
 
-def _resolve_project_id(explicit_project: str | None) -> str:
+def _resolve_project_id(explicit_project: Optional[str]) -> str:
     if explicit_project:
         return str(explicit_project).strip()
     _, project_id = google.auth.default(scopes=["https://www.googleapis.com/auth/cloud-platform"])
@@ -55,4 +55,3 @@ def run_cloud_run_job(
     if resp.status_code >= 400:
         raise RuntimeError(f"Cloud Run job execution failed ({resp.status_code}): {resp.text}")
     return resp.json()
-
