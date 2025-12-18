@@ -28,6 +28,20 @@ echo "📊 Starting Dashboard..."
 nohup python3 dashboard.py > logs/dashboard.log 2>&1 &
 DASH_PID=$!
 echo "   Dashboard PID: $DASH_PID"
+echo "   Dashboard: http://127.0.0.1:8080"
+
+# 2.5 Check external storage readiness (symlink targets writable)
+echo "💾 Checking SSD mount / symlink writability..."
+if python3 - <<'PY'
+import sys
+import config
+sys.exit(0 if config.critical_paths_ready(require_write=True) else 1)
+PY
+then
+  echo "   ✅ Storage ready"
+else
+  echo "   ❌ Storage not ready (mount /Volumes/Extreme SSD). Manager will wait."
+fi
 
 # 3. Start Manager in background
 nohup python3 omega_manager.py > /dev/null 2>&1 &

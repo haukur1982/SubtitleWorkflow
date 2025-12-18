@@ -1,4 +1,5 @@
 from flask import Flask, render_template, jsonify, request, send_file
+import os
 import sqlite3
 import json
 import shutil
@@ -9,8 +10,12 @@ from datetime import datetime
 from werkzeug.utils import secure_filename
 import omega_db
 import subprocess
+import sys
 import config
 import logging
+import secrets
+from functools import wraps
+from typing import Optional
 
 # Configure Logger
 logging.basicConfig(level=logging.INFO)
@@ -20,6 +25,115 @@ app = Flask(__name__)
 
 _force_burn_lock = threading.Lock()
 _force_burn_inflight = set()
+
+_ADMIN_TOKEN_ENV = "OMEGA_ADMIN_TOKEN"
+_MANAGER_RESTART_FLAG = config.BASE_DIR / "heartbeats" / "omega_manager.restart"
+
+@app.before_request
+def _dashboard_heartbeat():
+    try:
+        beat_dir = config.BASE_DIR / "heartbeats"
+        beat_dir.mkdir(exist_ok=True)
+        (beat_dir / "dashboard.beat").touch()
+    except Exception:
+        pass
+
+
+def _is_loopback(addr: Optional[str]) -> bool:
+    if not addr:
+        return False
+    if addr == "::1":
+        return True
+    if addr.startswith("127."):
+        return True
+    return addr == "localhost"
+
+
+def _get_request_admin_token() -> Optional[str]:
+    token = request.headers.get("X-Omega-Admin-Token")
+    if token:
+        return token.strip()
+
+    auth = request.headers.get("Authorization", "").strip()
+    if auth.lower().startswith("bearer "):
+        return auth.split(None, 1)[1].strip()
+
+    token = request.args.get("admin_token")
+    if token:
+        return str(token).strip()
+
+    if request.is_json:
+        payload = request.get_json(silent=True) or {}
+        token = payload.get("admin_token")
+        if token:
+            return str(token).strip()
+    return None
+
+
+def _is_admin_request() -> bool:
+    """
+    Admin policy:
+    - Always allow loopback requests (127.0.0.1 / ::1).
+    - For non-loopback requests, require OMEGA_ADMIN_TOKEN to be set and supplied.
+    """
+    remote = request.remote_addr
+    if _is_loopback(remote):
+        return True
+
+    configured = (os.environ.get(_ADMIN_TOKEN_ENV) or "").strip()
+    if not configured:
+        return False
+
+    provided = _get_request_admin_token()
+    return bool(provided) and secrets.compare_digest(provided, configured)
+
+
+def admin_required(fn):
+    @wraps(fn)
+    def _wrapped(*args, **kwargs):
+        if not _is_admin_request():
+            return jsonify({"error": "Admin access required"}), 403
+        return fn(*args, **kwargs)
+
+    return _wrapped
+
+
+def _tail_lines(path: Path, line_count: int = 200, max_bytes: int = 200_000) -> list[str]:
+    if line_count <= 0:
+        return []
+    try:
+        if not path.exists():
+            return []
+        with open(path, "rb") as f:
+            f.seek(0, os.SEEK_END)
+            size = f.tell()
+            f.seek(max(0, size - max_bytes), os.SEEK_SET)
+            data = f.read().decode("utf-8", errors="replace")
+        lines = data.splitlines()
+        return lines[-line_count:]
+    except Exception:
+        return []
+
+
+def _heartbeat_age_seconds(process_name: str) -> Optional[float]:
+    try:
+        beat = config.BASE_DIR / "heartbeats" / f"{process_name}.beat"
+        if not beat.exists():
+            return None
+        return max(0.0, time.time() - beat.stat().st_mtime)
+    except Exception:
+        return None
+
+
+def _disk_free_gb(path: Path) -> Optional[float]:
+    try:
+        if not path.exists():
+            return None
+        total, used, free = shutil.disk_usage(str(path))
+        return free / (2**30)
+    except Exception:
+        return None
+
 
 def get_all_jobs():
     """Fetch all jobs from the database."""
@@ -139,12 +253,17 @@ def _run_force_burn(file_stem: str):
         output_path = publisher.publish(video_path, srt_path, subtitle_style=subtitle_style, output_dir=delivery_dir)
         logger.info(f"✅ Force burn complete: {output_path}")
 
+        completed_at = datetime.now().isoformat()
         omega_db.update(
             file_stem,
             stage="COMPLETED",
             status="Done",
             progress=100.0,
-            meta={"burn_completed_at": datetime.now().isoformat(), "final_output": str(output_path)},
+            meta={
+                "burn_completed_at": completed_at,
+                "burn_end_time": completed_at,
+                "final_output": str(output_path),
+            },
         )
     except Exception as e:
         logger.error(f"Force burn failed for {file_stem}: {e}", exc_info=True)
@@ -168,20 +287,338 @@ def api_jobs():
     jobs = get_all_jobs()
     return jsonify(jobs)
 
+@app.route("/api/health")
+def api_health():
+    jobs = get_all_jobs()
+    stage_counts: dict[str, int] = {}
+    halted_count = 0
+    dead_count = 0
+    for job in jobs:
+        stage = (job.get("stage") or "UNKNOWN").upper()
+        stage_counts[stage] = stage_counts.get(stage, 0) + 1
+        meta = job.get("meta") or {}
+        if isinstance(meta, dict) and meta.get("halted"):
+            halted_count += 1
+        if stage == "DEAD":
+            dead_count += 1
+
+    storage_ready = False
+    try:
+        storage_ready = bool(config.critical_paths_ready(require_write=True))
+    except Exception:
+        storage_ready = False
+
+    manager_age = _heartbeat_age_seconds("omega_manager")
+    dashboard_age = _heartbeat_age_seconds("dashboard")
+
+    return jsonify(
+        {
+            "time": datetime.now().isoformat(),
+            "storage_ready": storage_ready,
+            "disk_free_gb": _disk_free_gb(config.DELIVERY_DIR),
+            "heartbeats": {
+                "omega_manager_age_seconds": manager_age,
+                "dashboard_age_seconds": dashboard_age,
+            },
+            "jobs": {
+                "total": len(jobs),
+                "stages": stage_counts,
+                "halted": halted_count,
+                "dead": dead_count,
+            },
+            "publish": {
+                "video_bitrate": getattr(config, "PUBLISH_VIDEO_BITRATE", None),
+                "video_maxrate": getattr(config, "PUBLISH_VIDEO_MAXRATE", None),
+                "video_bufsize": getattr(config, "PUBLISH_VIDEO_BUFSIZE", None),
+                "x264_preset": getattr(config, "PUBLISH_X264_PRESET", None),
+                "audio_codec": getattr(config, "PUBLISH_AUDIO_CODEC", None),
+            },
+        }
+    )
+
+
+@app.route("/api/logs")
+@admin_required
+def api_logs():
+    name = (request.args.get("name") or "").strip().lower()
+    try:
+        lines = int(request.args.get("lines") or 200)
+    except Exception:
+        lines = 200
+    lines = max(1, min(lines, 2000))
+
+    log_map = {
+        "manager": config.BASE_DIR / "logs" / "manager.log",
+        "dashboard": config.BASE_DIR / "logs" / "dashboard.log",
+    }
+    path = log_map.get(name)
+    if not path:
+        return jsonify({"error": "Invalid log name"}), 400
+    return jsonify({"name": name, "path": str(path), "lines": _tail_lines(path, line_count=lines)})
+
+
+@app.route("/api/output/<stem>")
+@admin_required
+def api_output(stem: str):
+    job = omega_db.get_job(stem) or {}
+    meta = job.get("meta") or {}
+    if not isinstance(meta, dict):
+        meta = {}
+
+    candidates: list[Path] = []
+    final_output = meta.get("final_output")
+    if final_output:
+        candidates.append(Path(str(final_output)))
+
+    vault_path = job.get("vault_path") or meta.get("vault_path")
+    if vault_path:
+        try:
+            delivery_dir = _derive_delivery_dir_from_vault(Path(str(vault_path)))
+            candidates.append(delivery_dir / f"{stem}_SUBBED.mp4")
+        except Exception:
+            pass
+
+    candidates.append(config.VIDEO_DIR / f"{stem}_SUBBED.mp4")
+
+    output_path = next((p for p in candidates if p.exists()), None)
+    if not output_path:
+        return jsonify({"error": "Output not found"}), 404
+
+    try:
+        resolved = output_path.resolve(strict=False)
+        delivery_root = config.DELIVERY_DIR.resolve(strict=False)
+        try:
+            resolved.relative_to(delivery_root)
+        except Exception:
+            return jsonify({"error": "Refusing to serve path outside delivery"}), 403
+    except Exception:
+        return jsonify({"error": "Invalid output path"}), 400
+
+    return send_file(str(output_path), mimetype="video/mp4", as_attachment=True, download_name=output_path.name)
+
+
+@app.route("/metrics")
+def metrics():
+    jobs = get_all_jobs()
+    stage_counts: dict[str, int] = {}
+    for job in jobs:
+        stage = (job.get("stage") or "UNKNOWN").upper()
+        stage_counts[stage] = stage_counts.get(stage, 0) + 1
+
+    manager_age = _heartbeat_age_seconds("omega_manager")
+    storage_ready = 0
+    try:
+        storage_ready = 1 if config.critical_paths_ready(require_write=True) else 0
+    except Exception:
+        storage_ready = 0
+
+    lines: list[str] = []
+    lines.append("# HELP omega_storage_ready Storage paths ready/writable (1/0)")
+    lines.append("# TYPE omega_storage_ready gauge")
+    lines.append(f"omega_storage_ready {storage_ready}")
+    lines.append("# HELP omega_jobs_total Total jobs in DB")
+    lines.append("# TYPE omega_jobs_total gauge")
+    lines.append(f"omega_jobs_total {len(jobs)}")
+    lines.append("# HELP omega_jobs_stage_total Jobs by stage")
+    lines.append("# TYPE omega_jobs_stage_total gauge")
+    for stage, count in sorted(stage_counts.items()):
+        lines.append(f'omega_jobs_stage_total{{stage="{stage}"}} {count}')
+    if manager_age is not None:
+        lines.append("# HELP omega_manager_heartbeat_age_seconds Seconds since manager heartbeat")
+        lines.append("# TYPE omega_manager_heartbeat_age_seconds gauge")
+        lines.append(f"omega_manager_heartbeat_age_seconds {manager_age:.3f}")
+
+    return "\n".join(lines) + "\n", 200, {"Content-Type": "text/plain; version=0.0.4"}
+
+
 @app.route('/api/action', methods=['POST'])
+@admin_required
 def api_action():
     """Handle surgical actions."""
-    data = request.json
+    data = request.get_json(silent=True) or {}
     action = data.get('action')
     file_stem = data.get('file_stem')
+
+    if action == "restart_manager":
+        try:
+            _MANAGER_RESTART_FLAG.parent.mkdir(exist_ok=True)
+            _MANAGER_RESTART_FLAG.write_text(datetime.now().isoformat(), encoding="utf-8")
+        except Exception as e:
+            return jsonify({"error": f"Failed to write restart flag: {e}"}), 500
+
+        # If the manager looks down, attempt to start it.
+        started = False
+        age = _heartbeat_age_seconds("omega_manager")
+        if age is None or age > 30:
+            try:
+                mgr_path = config.BASE_DIR / "omega_manager.py"
+                subprocess.Popen(
+                    [sys.executable, str(mgr_path)],
+                    cwd=str(config.BASE_DIR),
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    start_new_session=True,
+                )
+                started = True
+            except Exception as e:
+                return jsonify({"error": f"Failed to start manager: {e}"}), 500
+
+        msg = "Restart requested; manager will restart when idle."
+        if started:
+            msg = "Manager started and restart requested."
+        return jsonify({"success": True, "message": msg})
     
     if not file_stem:
         return jsonify({"error": "Missing file_stem"}), 400
 
     if action == "reset_review":
         # Reset to REVIEWED stage (triggers Finalizer)
-        omega_db.update(file_stem, stage="REVIEWED", status="Manual Reset", progress=50.0)
+        omega_db.update(file_stem, stage="REVIEWED", status="Manual Reset", progress=70.0)
         return jsonify({"success": True, "message": f"Reset {file_stem} to Review"})
+
+    elif action == "retry_translate":
+        skel = config.VAULT_DATA / f"{file_stem}_SKELETON.json"
+        skel_done = config.VAULT_DATA / f"{file_stem}_SKELETON_DONE.json"
+        if not skel.exists():
+            if skel_done.exists():
+                shutil.copy2(skel_done, skel)
+            else:
+                return jsonify({"error": f"Skeleton not found for {file_stem}"}), 404
+
+        omega_db.update(
+            file_stem,
+            stage="TRANSCRIBED",
+            status="Manual Retry: Translation",
+            progress=30.0,
+            meta={"halted": False, "manual_retry_translate_at": datetime.now().isoformat()},
+        )
+        return jsonify({"success": True, "message": f"Retry translate queued for {file_stem}"})
+
+    elif action == "retry_review":
+        job = omega_db.get_job(file_stem) or {}
+        lang = (job.get("target_language") or "is").lower()
+        trans_path = config.EDITOR_DIR / f"{file_stem}_{lang.upper()}.json"
+
+        if not trans_path.exists():
+            # Reconstruct a review input file from the best available artifacts.
+            src_path = config.VAULT_DATA / f"{file_stem}_SKELETON_DONE.json"
+            if not src_path.exists():
+                src_path = config.VAULT_DATA / f"{file_stem}_SKELETON.json"
+            if not src_path.exists():
+                return jsonify({"error": f"Source skeleton not found for {file_stem}"}), 404
+
+            with open(src_path, "r", encoding="utf-8") as f:
+                src_wrapper = json.load(f)
+            source_data = src_wrapper.get("segments", src_wrapper) if isinstance(src_wrapper, dict) else src_wrapper
+            if not isinstance(source_data, list):
+                return jsonify({"error": f"Invalid skeleton format for {file_stem}"}), 400
+
+            approved_path = config.TRANSLATED_DONE_DIR / f"{file_stem}_APPROVED.json"
+            if not approved_path.exists():
+                return jsonify({"error": f"Approved file not found for {file_stem}"}), 404
+
+            with open(approved_path, "r", encoding="utf-8") as f:
+                approved_wrapper = json.load(f)
+            translated_data = (
+                approved_wrapper.get("segments", approved_wrapper)
+                if isinstance(approved_wrapper, dict)
+                else approved_wrapper
+            )
+            if not isinstance(translated_data, list):
+                return jsonify({"error": f"Invalid approved format for {file_stem}"}), 400
+
+            payload = {"source_data": source_data, "translated_data": translated_data}
+            trans_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(trans_path, "w", encoding="utf-8") as f:
+                json.dump(payload, f, indent=2, ensure_ascii=False)
+
+        omega_db.update(
+            file_stem,
+            stage="TRANSLATED",
+            status="Manual Retry: Review",
+            progress=55.0,
+            meta={"halted": False, "translation_path": str(trans_path), "manual_retry_review_at": datetime.now().isoformat()},
+        )
+        return jsonify({"success": True, "message": f"Retry review queued for {file_stem}"})
+
+    elif action == "unhalt_job":
+        job = omega_db.get_job(file_stem)
+        if not job:
+            return jsonify({"error": f"Job not found: {file_stem}"}), 404
+
+        meta = job.get("meta") or {}
+        if not isinstance(meta, dict):
+            meta = {}
+
+        now = datetime.now().isoformat()
+
+        # 1) Completed output exists?
+        output_candidates: list[Path] = []
+        final_output = meta.get("final_output")
+        if final_output:
+            output_candidates.append(Path(str(final_output)))
+
+        vault_path = job.get("vault_path") or meta.get("vault_path")
+        if vault_path:
+            try:
+                delivery_dir = _derive_delivery_dir_from_vault(Path(str(vault_path)))
+                output_candidates.append(delivery_dir / f"{file_stem}_SUBBED.mp4")
+            except Exception:
+                pass
+        output_candidates.append(config.VIDEO_DIR / f"{file_stem}_SUBBED.mp4")
+
+        output_path = next((p for p in output_candidates if p.exists()), None)
+        if output_path:
+            omega_db.update(
+                file_stem,
+                stage="COMPLETED",
+                status="Done",
+                progress=100.0,
+                meta={"halted": False, "unhalted_at": now, "final_output": str(output_path)},
+            )
+            return jsonify({"success": True, "message": f"Unhalted {file_stem} (already completed)"})
+
+        # 2) SRT exists -> ready to burn
+        srt_path = config.SRT_DIR / f"{file_stem}.srt"
+        if srt_path.exists():
+            omega_db.update(
+                file_stem,
+                stage="FINALIZED",
+                status="Ready to Burn",
+                progress=90.0,
+                meta={"halted": False, "unhalted_at": now},
+            )
+            return jsonify({"success": True, "message": f"Unhalted {file_stem} (resume at FINALIZED)"})
+
+        # 3) Approved exists -> ready to finalize
+        approved = config.TRANSLATED_DONE_DIR / f"{file_stem}_APPROVED.json"
+        if approved.exists():
+            omega_db.update(
+                file_stem,
+                stage="REVIEWED",
+                status="Editor Approved",
+                progress=70.0,
+                meta={"halted": False, "unhalted_at": now},
+            )
+            return jsonify({"success": True, "message": f"Unhalted {file_stem} (resume at REVIEWED)"})
+
+        # 4) Skeleton exists -> ready to translate
+        skel = config.VAULT_DATA / f"{file_stem}_SKELETON.json"
+        skel_done = config.VAULT_DATA / f"{file_stem}_SKELETON_DONE.json"
+        if not skel.exists() and skel_done.exists():
+            try:
+                shutil.copy2(skel_done, skel)
+            except Exception:
+                pass
+
+        omega_db.update(
+            file_stem,
+            stage="TRANSCRIBED",
+            status="Ready for Translation",
+            progress=30.0,
+            meta={"halted": False, "unhalted_at": now},
+        )
+        return jsonify({"success": True, "message": f"Unhalted {file_stem} (resume at TRANSCRIBED)"})
         
     elif action == "force_burn":
         with _force_burn_lock:
@@ -243,6 +680,7 @@ def api_action():
     return jsonify({"error": "Invalid action"}), 400
 
 @app.route('/api/upload', methods=['POST'])
+@admin_required
 def upload_file():
     if 'file' not in request.files:
         return jsonify({"error": "No file part"}), 400
@@ -259,6 +697,7 @@ def upload_file():
         return jsonify({"success": True, "filename": filename})
 
 @app.route('/api/surgical/segments', methods=['GET'])
+@admin_required
 def get_segments():
     stem = request.args.get('stem')
     if not stem: return jsonify({"error": "Missing stem"}), 400
@@ -311,6 +750,7 @@ def get_segments():
     return jsonify({"error": "No editable file found"}), 404
 
 @app.route('/api/stream/<stem>')
+@admin_required
 def stream_proxy(stem):
     """Streams the proxy video if it exists."""
     proxy_path = config.PROXIES_DIR / f"{stem}_PROXY.mp4"
@@ -323,6 +763,7 @@ def stream_proxy(stem):
     return send_file(proxy_path, mimetype='video/mp4')
 
 @app.route('/api/surgical/save', methods=['POST'])
+@admin_required
 def save_segments():
     data = request.json
     stem = data.get('stem')
@@ -332,8 +773,8 @@ def save_segments():
         return jsonify({"error": "Missing data"}), 400
         
     try:
-        # 1. Determine Path (Always save to APPROVED for finalizer)
-        output_path = config.EDITOR_DIR / f"{stem}_APPROVED.json"
+        # 1. Save back to the canonical approved file
+        output_path = config.TRANSLATED_DONE_DIR / f"{stem}_APPROVED.json"
         
         # 2. Backup if exists
         if output_path.exists():
@@ -342,7 +783,7 @@ def save_segments():
             
         # 3. Save New Content
         with open(output_path, 'w', encoding='utf-8') as f:
-            json.dump(segments, f, indent=2, ensure_ascii=False)
+            json.dump({"segments": segments, "meta": {"edited_via": "dashboard", "edited_at": datetime.now().isoformat()}}, f, indent=2, ensure_ascii=False)
             
         # 4. Auto-Finalize
         from workers import finalizer
@@ -351,7 +792,18 @@ def save_segments():
         job = omega_db.get_job(stem)
         lang = job.get('target_language', 'is') if job else 'is'
         
-        finalizer.finalize(output_path, target_language=lang)
+        srt_path, normalized_path = finalizer.finalize(output_path, target_language=lang)
+        omega_db.update(
+            stem,
+            stage="FINALIZED",
+            status="Ready to Burn",
+            progress=90.0,
+            meta={
+                "surgical_edit_at": datetime.now().isoformat(),
+                "srt_path": str(srt_path),
+                "normalized_path": str(normalized_path),
+            },
+        )
         
         return jsonify({"success": True})
         
@@ -363,4 +815,7 @@ if __name__ == '__main__':
     # Ensure DB exists
     omega_db.init_db()
     # Run server (Disable reloader to prevent zombie processes)
-    app.run(host='0.0.0.0', port=8080, debug=True, use_reloader=False)
+    host = os.environ.get("OMEGA_DASH_HOST", "127.0.0.1")
+    port = int(os.environ.get("OMEGA_DASH_PORT", "8080"))
+    debug = (os.environ.get("OMEGA_DASH_DEBUG") or "").strip().lower() in {"1", "true", "yes"}
+    app.run(host=host, port=port, debug=debug, use_reloader=False)

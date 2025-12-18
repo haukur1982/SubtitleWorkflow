@@ -21,6 +21,10 @@ omega.db
 logs/
 *.log
 
+# Heartbeats (runtime liveness files)
+heartbeats/*.beat
+heartbeats/*.restart
+
 # Media & Workflow Folders (Too large for Git)
 1_INBOX/
 2_VAULT/

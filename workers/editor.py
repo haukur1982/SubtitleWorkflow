@@ -74,6 +74,9 @@ def review(translation_path: Path):
            - "Partners" -> "Bakhjarlar".
            - "I AM" -> "ÉG ER".
            - "Covenant" -> "Sáttmáli".
+        4. CAPITALIZATION (Broadcast):
+           - Treat ALL CAPS as a robot mistake; convert to normal sentence case.
+           - Preserve acronyms/initialisms (USA, TV, I-690) and the mandatory title "ÉG ER".
            
         INPUT DATA:
         --- SOURCE (English) ---
@@ -105,6 +108,9 @@ def review(translation_path: Path):
         YOUR TASK: 
         Review the {lang_suffix} translation against the English source.
         Ensure flow, grammar, and theological accuracy.
+
+        STRICT RULES:
+        - CAPITALIZATION (Broadcast): Do NOT allow ALL CAPS sentences; convert to natural sentence case while preserving acronyms/initialisms and mandatory titles (e.g., ÉG ER / YO SOY).
         
         INPUT DATA:
         --- SOURCE (English) ---

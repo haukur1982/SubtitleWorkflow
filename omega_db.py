@@ -70,7 +70,17 @@ def migrate_schema():
     
     conn.close()
 
-def update(file_stem, stage=None, status=None, progress=None, meta=None, target_language=None, program_profile=None, subtitle_style=None):
+def update(
+    file_stem,
+    stage=None,
+    status=None,
+    progress=None,
+    meta=None,
+    target_language=None,
+    program_profile=None,
+    subtitle_style=None,
+    editor_report=None,
+):
     """Update job status in the database."""
     if not DB_PATH.exists():
         init_db()
@@ -122,6 +132,9 @@ def update(file_stem, stage=None, status=None, progress=None, meta=None, target_
             if subtitle_style is not None:
                 fields.append("subtitle_style=?")
                 values.append(subtitle_style)
+            if editor_report is not None:
+                fields.append("editor_report=?")
+                values.append(editor_report)
                 
             fields.append("updated_at=?")
             values.append(now)
@@ -134,9 +147,9 @@ def update(file_stem, stage=None, status=None, progress=None, meta=None, target_
         else:
             # Insert new
             c.execute('''
-                INSERT INTO jobs (file_stem, stage, status, progress, updated_at, meta, target_language, program_profile, subtitle_style)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ''', (file_stem, stage or "QUEUED", status or "Initialized", progress or 0.0, now, json.dumps(meta or {}), target_language or 'is', program_profile or 'standard', subtitle_style or 'Classic'))
+                INSERT INTO jobs (file_stem, stage, status, progress, updated_at, meta, target_language, program_profile, subtitle_style, editor_report)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ''', (file_stem, stage or "QUEUED", status or "Initialized", progress or 0.0, now, json.dumps(meta or {}), target_language or 'is', program_profile or 'standard', subtitle_style or 'Classic', editor_report))
             
         c.execute("COMMIT")
         

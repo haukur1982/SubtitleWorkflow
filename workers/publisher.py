@@ -61,6 +61,27 @@ def adjust_ass_time(time_str, delta_ms):
     new_cs = (rem % 1000) // 10
     return f"{new_h}:{new_m:02d}:{new_s:02d}.{new_cs:02d}"
 
+def _ffmpeg_encode_args() -> list[str]:
+    return [
+        "-c:v", "libx264",
+        "-preset", getattr(config, "PUBLISH_X264_PRESET", "medium"),
+        "-b:v", getattr(config, "PUBLISH_VIDEO_BITRATE", "15M"),
+        "-maxrate", getattr(config, "PUBLISH_VIDEO_MAXRATE", "18M"),
+        "-bufsize", getattr(config, "PUBLISH_VIDEO_BUFSIZE", "30M"),
+        "-profile:v", "high",
+        "-pix_fmt", "yuv420p",
+        "-movflags", "+faststart",
+    ]
+
+
+def _ffmpeg_audio_args() -> list[str]:
+    audio_codec = getattr(config, "PUBLISH_AUDIO_CODEC", "copy") or "copy"
+    if str(audio_codec).lower() == "copy":
+        return ["-c:a", "copy"]
+    # Best-effort: user can override with env vars; keep defaults conservative.
+    return ["-c:a", str(audio_codec)]
+
+
 def publish(video_path: Path, srt_path: Path, subtitle_style: str = "Classic", output_dir: Path = None):
     """
     Burns subtitles into video using the specified style.
@@ -114,12 +135,12 @@ def publish(video_path: Path, srt_path: Path, subtitle_style: str = "Classic", o
         # 3. Composite Overlay onto Video
         logger.info("   Compositing Overlay...")
         cmd = [
-            "ffmpeg", "-y",
+            config.FFMPEG_BIN, "-y",
             "-i", str(video_path),
             "-i", str(overlay_mov_path),
             "-filter_complex", "[0:v][1:v]overlay=0:0",
-            "-c:v", "libx264", "-preset", "fast", "-crf", "23",
-            "-c:a", "copy",
+            *_ffmpeg_encode_args(),
+            *_ffmpeg_audio_args(),
             str(output_path)
         ]
         
@@ -129,19 +150,26 @@ def publish(video_path: Path, srt_path: Path, subtitle_style: str = "Classic", o
         # 1. Generate ASS
         ass_path = config.VAULT_DATA / f"{stem}.ass"
         generate_ass_from_srt(srt_path, ass_path, style_name=ass_style_name)
+        ass_path_escaped = str(ass_path).replace(":", "\\:").replace("'", "\\'")
         
         # 2. Burn
         cmd = [
-            "ffmpeg", "-y",
+            config.FFMPEG_BIN, "-y",
             "-i", str(video_path),
-            "-vf", f"ass={ass_path}",
-            "-c:v", "libx264", "-preset", "fast", "-crf", "23",
-            "-c:a", "copy",
+            "-vf", f"ass='{ass_path_escaped}'",
+            *_ffmpeg_encode_args(),
+            *_ffmpeg_audio_args(),
             str(output_path)
         ]
     
     logger.info(f"   Running FFmpeg: {' '.join(cmd)}")
-    subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    try:
+        subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
+    except subprocess.CalledProcessError as e:
+        stderr = (e.stderr or "").strip()
+        if len(stderr) > 2000:
+            stderr = stderr[:2000] + "\n... (truncated)"
+        raise RuntimeError(f"FFmpeg failed (exit {e.returncode}): {stderr}") from e
     
     return output_path
 

@@ -46,3 +46,4 @@ sh start_omega.sh
 ## Troubleshooting
 - **Dashboard not loading?** Check `http://127.0.0.1:8080`.
 - **Permission errors?** Make sure Terminal has "Full Disk Access" in System Settings if it complains about accessing the external drive.
+- **Remote access (optional):** By default the dashboard binds to `127.0.0.1` (local only). To expose it, start with `OMEGA_DASH_HOST=0.0.0.0` and set `OMEGA_ADMIN_TOKEN` for control actions.

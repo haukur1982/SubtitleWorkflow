@@ -112,6 +112,47 @@
                     </li>
                 </ul>
             </div>
+
+            <div class="p-5 border-t border-[#333]">
+                <h3 class="text-[10px] font-bold text-[#666] mb-4 uppercase tracking-[0.2em]">System</h3>
+
+                <div class="space-y-2 text-xs">
+                    <div class="flex items-center justify-between">
+                        <span class="text-[#888]">Manager</span>
+                        <span id="sys-manager" class="font-mono text-[#666]">--</span>
+                    </div>
+                    <div class="flex items-center justify-between">
+                        <span class="text-[#888]">SSD</span>
+                        <span id="sys-ssd" class="font-mono text-[#666]">--</span>
+                    </div>
+                    <div class="flex items-center justify-between">
+                        <span class="text-[#888]">Free</span>
+                        <span id="sys-disk" class="font-mono text-[#666]">--</span>
+                    </div>
+                </div>
+
+                <div class="mt-4">
+                    <label
+                        class="block text-[10px] font-bold text-[#666] uppercase tracking-wider mb-2">Admin Token</label>
+                    <input id="admin-token-input" type="password" placeholder="(optional, for remote access)"
+                        class="w-full bg-[#222] border border-[#333] rounded-lg px-3 py-2 text-xs text-white focus:border-[#555] focus:ring-0 outline-none" />
+                    <div class="grid grid-cols-2 gap-2 mt-2">
+                        <button onclick="saveAdminToken()"
+                            class="bg-[#222] hover:bg-[#2a2a2a] text-[#aaa] hover:text-white py-2 rounded-lg text-xs border border-[#333] transition-colors">
+                            Save
+                        </button>
+                        <button onclick="clearAdminToken()"
+                            class="bg-[#222] hover:bg-[#2a2a2a] text-[#aaa] hover:text-white py-2 rounded-lg text-xs border border-[#333] transition-colors">
+                            Clear
+                        </button>
+                    </div>
+                </div>
+
+                <button onclick="restartManager()" id="btn-restart-manager"
+                    class="w-full mt-3 bg-[#222] hover:bg-[#2a2a2a] text-[#aaa] hover:text-white py-2.5 rounded-lg text-xs border border-[#333] transition-colors">
+                    Restart Manager
+                </button>
+            </div>
         </div>
 
         <!-- CENTER: BATCH LIST -->
@@ -234,6 +275,21 @@
 
                     <div class="group">
                         <label
+                            class="block text-[10px] font-bold text-[#666] uppercase tracking-wider mb-2 group-hover:text-[#888] transition-colors">Program
+                            Profile</label>
+                        <div class="relative">
+                            <select id="insp-profile" onchange="updateJobSetting('program_profile', this.value)"
+                                class="w-full bg-[#222] border border-[#333] rounded-lg px-3 py-2.5 text-sm text-white focus:border-[#555] focus:ring-0 outline-none appearance-none hover:bg-[#262626] transition-colors">
+                                <option value="standard">Standard (Omega TV)</option>
+                                <option value="in_touch">In Touch</option>
+                                <option value="benny_hinn">Benny Hinn</option>
+                            </select>
+                            <div class="absolute right-3 top-3 pointer-events-none text-[#666]">▼</div>
+                        </div>
+                    </div>
+
+                    <div class="group">
+                        <label
                             class="block text-[10px] font-bold text-[#666] uppercase tracking-wider mb-2 group-hover:text-[#888] transition-colors">Visual
                             Style</label>
                         <div class="relative">
@@ -294,6 +350,44 @@
                             </div>
                         </div>
 
+                        <!-- Broadcast QA -->
+                        <div id="broadcast-qa" class="hidden mb-6 bg-[#1a1a1a] border border-[#333] rounded-lg p-4">
+                            <div class="flex items-center justify-between mb-3">
+                                <span class="text-[10px] font-bold text-[#666] uppercase tracking-wider">Broadcast
+                                    QA</span>
+                                <div id="qa-caps-badge"
+                                    class="px-2 py-1 rounded bg-red-500/20 text-red-300 text-xs font-bold">--</div>
+                            </div>
+                            <p id="qa-caps-text" class="text-xs text-[#888] leading-relaxed mb-3">--</p>
+
+                            <div id="qa-caps-samples-container" class="hidden">
+                                <span
+                                    class="text-[10px] font-bold text-[#666] uppercase tracking-wider block mb-1">Examples</span>
+                                <ul id="qa-caps-samples" class="list-disc list-inside text-xs text-[#aaa]"></ul>
+                            </div>
+                        </div>
+
+                        <!-- Output -->
+                        <div id="output-section" class="hidden mb-6 bg-[#1a1a1a] border border-[#333] rounded-lg p-4">
+                            <div class="flex items-center justify-between mb-3">
+                                <span class="text-[10px] font-bold text-[#666] uppercase tracking-wider">Output</span>
+                                <a id="btn-download-output" href="#"
+                                    class="text-xs font-bold text-blue-400 hover:text-blue-300 transition-colors">Download</a>
+                            </div>
+                            <p id="output-path" class="text-xs text-[#888] font-mono break-all">--</p>
+                        </div>
+
+                        <!-- Last Error / Halt -->
+                        <div id="error-box" class="hidden mb-6 bg-red-900/10 border border-red-900/30 rounded-lg p-4">
+                            <div class="flex items-center justify-between mb-2">
+                                <span class="text-[10px] font-bold text-red-300 uppercase tracking-wider">Last
+                                    Error</span>
+                                <span id="halt-badge"
+                                    class="hidden px-2 py-1 rounded bg-red-500/20 text-red-300 text-[10px] font-bold uppercase tracking-wider">Halted</span>
+                            </div>
+                            <p id="error-text" class="text-xs text-[#aaa] font-mono break-words">--</p>
+                        </div>
+
                         <hr class="border-[#333] my-8">
 
                         <!-- Actions -->
@@ -306,7 +400,7 @@
                             <div class="grid grid-cols-2 gap-3">
                                 <button onclick="resetReview()"
                                     class="w-full bg-[#222] hover:bg-[#2a2a2a] text-[#aaa] hover:text-white py-2.5 rounded-lg text-xs border border-[#333] transition-colors">
-                                    Reset
+                                    Retry Finalize
                                 </button>
 
                                 <button onclick="forceBurn()"
@@ -314,6 +408,22 @@
                                     Force Burn
                                 </button>
                             </div>
+
+                            <div class="grid grid-cols-2 gap-3">
+                                <button onclick="retryTranslate()"
+                                    class="w-full bg-[#222] hover:bg-[#2a2a2a] text-[#aaa] hover:text-white py-2.5 rounded-lg text-xs border border-[#333] transition-colors">
+                                    Retry Translate
+                                </button>
+                                <button onclick="retryReview()"
+                                    class="w-full bg-[#222] hover:bg-[#2a2a2a] text-[#aaa] hover:text-white py-2.5 rounded-lg text-xs border border-[#333] transition-colors">
+                                    Retry Review
+                                </button>
+                            </div>
+
+                            <button id="btn-unhalt" onclick="unhaltJob()"
+                                class="w-full bg-red-900/10 hover:bg-red-900/30 text-red-500/70 hover:text-red-400 py-2.5 rounded-lg text-xs border border-red-900/20 hover:border-red-900/50 transition-colors hidden">
+                                Unhalt Job
+                            </button>
 
                             <button onclick="deleteJob()"
                                 class="w-full bg-red-900/10 hover:bg-red-900/30 text-red-500/70 hover:text-red-400 py-2.5 rounded-lg text-xs border border-red-900/20 hover:border-red-900/50 transition-colors mt-2">
@@ -341,11 +451,62 @@
                 let jobsData = [];
                 let selectedStem = null;
                 let currentTab = 'active'; // 'active' or 'completed'
+                const ADMIN_TOKEN_STORAGE_KEY = 'omega_admin_token';
+
+                function getAdminToken() {
+                    try {
+                        return localStorage.getItem(ADMIN_TOKEN_STORAGE_KEY) || '';
+                    } catch (e) {
+                        return '';
+                    }
+                }
+
+                function setAdminToken(token) {
+                    try {
+                        if (token) localStorage.setItem(ADMIN_TOKEN_STORAGE_KEY, token);
+                        else localStorage.removeItem(ADMIN_TOKEN_STORAGE_KEY);
+                    } catch (e) {
+                        // ignore
+                    }
+                }
+
+                function adminHeaders() {
+                    const token = getAdminToken();
+                    return token ? { 'X-Omega-Admin-Token': token } : {};
+                }
+
+                async function postJson(url, payload) {
+                    const res = await fetch(url, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json', ...adminHeaders() },
+                        body: JSON.stringify(payload)
+                    });
+                    return await res.json();
+                }
+
+                function showSaved() {
+                    const el = document.getElementById('save-indicator');
+                    if (!el) return;
+                    el.classList.remove('opacity-0');
+                    el.classList.add('opacity-100');
+                    setTimeout(() => {
+                        el.classList.add('opacity-0');
+                        el.classList.remove('opacity-100');
+                    }, 1200);
+                }
 
                 // --- INIT ---
                 document.addEventListener('DOMContentLoaded', () => {
                     fetchJobs();
                     setInterval(fetchJobs, 2000);
+
+                    // Admin token (optional)
+                    const tokenInput = document.getElementById('admin-token-input');
+                    if (tokenInput) tokenInput.value = getAdminToken();
+
+                    // System health polling
+                    fetchHealth();
+                    setInterval(fetchHealth, 5000);
 
                     // Drag & Drop
                     const dropZone = document.getElementById('drop-zone');
@@ -402,6 +563,22 @@
                     miniLog.scrollTop = miniLog.scrollHeight;
                 }
 
+                function saveAdminToken() {
+                    const input = document.getElementById('admin-token-input');
+                    const token = (input?.value || '').trim();
+                    setAdminToken(token);
+                    log(token ? 'Admin token saved' : 'Admin token cleared');
+                    showSaved();
+                }
+
+                function clearAdminToken() {
+                    const input = document.getElementById('admin-token-input');
+                    if (input) input.value = '';
+                    setAdminToken('');
+                    log('Admin token cleared');
+                    showSaved();
+                }
+
                 function switchTab(tab) {
                     currentTab = tab;
 
@@ -431,6 +608,7 @@
                         log("Uploading " + files[0].name + "...");
                         const res = await fetch('/api/upload', {
                             method: 'POST',
+                            headers: { ...adminHeaders() },
                             body: formData
                         });
                         const data = await res.json();
@@ -457,6 +635,56 @@
                     }
                 }
 
+                function formatAge(seconds) {
+                    if (seconds === null || seconds === undefined) return '—';
+                    if (seconds < 60) return `${seconds.toFixed(0)}s`;
+                    const mins = Math.floor(seconds / 60);
+                    const rem = Math.floor(seconds % 60);
+                    return `${mins}m ${rem}s`;
+                }
+
+                async function fetchHealth() {
+                    try {
+                        const res = await fetch('/api/health');
+                        const h = await res.json();
+
+                        const mgrEl = document.getElementById('sys-manager');
+                        const ssdEl = document.getElementById('sys-ssd');
+                        const diskEl = document.getElementById('sys-disk');
+
+                        const mgrAge = h?.heartbeats?.omega_manager_age_seconds;
+                        if (mgrEl) {
+                            const online = typeof mgrAge === 'number' && mgrAge < 10;
+                            mgrEl.textContent = online ? `ONLINE (${formatAge(mgrAge)})` : `OFFLINE (${formatAge(mgrAge)})`;
+                            mgrEl.className = `font-mono ${online ? 'text-emerald-400' : 'text-red-400'}`;
+                        }
+
+                        if (ssdEl) {
+                            const ready = !!h?.storage_ready;
+                            ssdEl.textContent = ready ? 'READY' : 'NOT READY';
+                            ssdEl.className = `font-mono ${ready ? 'text-emerald-400' : 'text-red-400'}`;
+                        }
+
+                        if (diskEl) {
+                            const free = h?.disk_free_gb;
+                            if (typeof free === 'number') {
+                                diskEl.textContent = `${free.toFixed(1)} GB`;
+                                diskEl.className = `font-mono ${free < 20 ? 'text-amber-400' : 'text-[#aaa]'}`;
+                            } else {
+                                diskEl.textContent = '—';
+                                diskEl.className = 'font-mono text-[#666]';
+                            }
+                        }
+                    } catch (err) {
+                        const mgrEl = document.getElementById('sys-manager');
+                        const ssdEl = document.getElementById('sys-ssd');
+                        const diskEl = document.getElementById('sys-disk');
+                        if (mgrEl) { mgrEl.textContent = 'ERROR'; mgrEl.className = 'font-mono text-red-400'; }
+                        if (ssdEl) { ssdEl.textContent = 'ERROR'; ssdEl.className = 'font-mono text-red-400'; }
+                        if (diskEl) { diskEl.textContent = 'ERROR'; diskEl.className = 'font-mono text-red-400'; }
+                    }
+                }
+
                 function calculateElapsed(job) {
                     if (!job.meta || !job.meta.ingest_time) return "--:--";
                     const start = new Date(job.meta.ingest_time);
@@ -465,6 +693,8 @@
                     let end = new Date();
                     if (job.meta.burn_end_time) {
                         end = new Date(job.meta.burn_end_time);
+                    } else if (job.meta.burn_completed_at) {
+                        end = new Date(job.meta.burn_completed_at);
                     } else if (job.stage === 'COMPLETED' || job.stage === 'PUBLISHED') {
                         // Fallback if burn_end_time is missing but job is done
                         end = new Date(job.updated_at);
@@ -482,11 +712,15 @@
                     // Filter Jobs
                     const filteredJobs = jobsData.filter(job => {
                         const statusLower = job.status.toLowerCase();
+                        const stageUpper = (job.stage || '').toUpperCase();
                         // Robust Completion Check: Completed OR Error OR Stalled
-                        const isDone = job.stage === 'COMPLETED' ||
+                        const isDone = stageUpper === 'COMPLETED' ||
+                            stageUpper === 'DEAD' ||
                             job.progress >= 100 ||
                             statusLower.includes('done') ||
                             statusLower.includes('completed') ||
+                            statusLower.includes('dead') ||
+                            statusLower.includes('halted') ||
                             statusLower.includes('error') ||
                             statusLower.includes('failed') ||
                             statusLower.includes('stalled');
@@ -509,11 +743,12 @@
 
                     tbody.innerHTML = filteredJobs.map(job => {
                         const isSelected = job.file_stem === selectedStem;
+                        const statusLower = (job.status || '').toLowerCase();
                         let statusIcon = '⚪️';
-                        if (job.status.includes('Error')) statusIcon = '🔴';
-                        else if (job.status.includes('Done')) statusIcon = '🟢';
-                        else if (job.status.includes('Waiting')) statusIcon = '🟡';
-                        else if (job.stage !== 'INGEST') statusIcon = '🔵';
+                        if (statusLower.includes('dead') || statusLower.includes('halted') || statusLower.includes('error') || statusLower.includes('failed')) statusIcon = '🔴';
+                        else if (statusLower.includes('done') || statusLower.includes('completed')) statusIcon = '🟢';
+                        else if (statusLower.includes('waiting')) statusIcon = '🟡';
+                        else if ((job.stage || '').toUpperCase() !== 'INGEST') statusIcon = '🔵';
 
                         const elapsed = calculateElapsed(job);
 
@@ -562,15 +797,23 @@
                     const job = jobsData.find(j => j.file_stem === selectedJobId);
                     if (!job) return;
 
+                    const stageUpper = (job.stage || '').toUpperCase();
+                    const statusText = job.status || '';
+                    const statusLower = statusText.toLowerCase();
+                    const meta = job.meta || {};
+
                     document.getElementById('insp-title').innerText = job.file_stem;
-                    document.getElementById('insp-id').innerText = "Status: " + job.status;
+                    document.getElementById('insp-id').innerText = `Stage: ${stageUpper || '—'} • ${statusText}`;
 
                     // Status Badge
-                    document.getElementById('insp-status-text').innerText = job.status;
+                    document.getElementById('insp-status-text').innerText = statusText;
                     const statusDot = document.getElementById('insp-status-dot');
-                    if (job.status.includes('Error')) statusDot.className = "w-2 h-2 rounded-full bg-red-500";
-                    else if (job.status.includes('Done')) statusDot.className = "w-2 h-2 rounded-full bg-emerald-500";
-                    else if (job.status.includes('Pending Approval')) statusDot.className = "w-2 h-2 rounded-full bg-amber-500 animate-pulse";
+                    const halted = !!meta.halted || stageUpper === 'DEAD';
+                    const done = stageUpper === 'COMPLETED' || statusLower.includes('done') || statusLower.includes('completed');
+                    const waitingApproval = statusLower.includes('waiting for burn approval') || statusLower.includes('pending approval');
+                    if (halted) statusDot.className = "w-2 h-2 rounded-full bg-red-500";
+                    else if (done) statusDot.className = "w-2 h-2 rounded-full bg-emerald-500";
+                    else if (waitingApproval) statusDot.className = "w-2 h-2 rounded-full bg-amber-500 animate-pulse";
                     else statusDot.className = "w-2 h-2 rounded-full bg-blue-500 animate-pulse";
 
                     // Stepper Logic
@@ -580,17 +823,18 @@
                     updateStep('burn', progress >= 100, progress < 100 && progress >= 70);
 
                     // Update Inputs (Only if not focused to avoid jitter)
-                    if (document.activeElement.id !== 'insp-lang') document.getElementById('insp-lang').value = job.target_language || 'en';
-                    if (document.activeElement.id !== 'insp-style') document.getElementById('insp-style').value = job.subtitle_style || 'Modern';
+                    if (document.activeElement.id !== 'insp-lang') document.getElementById('insp-lang').value = job.target_language || 'is';
+                    if (document.activeElement.id !== 'insp-profile') document.getElementById('insp-profile').value = job.program_profile || 'standard';
+                    if (document.activeElement.id !== 'insp-style') document.getElementById('insp-style').value = job.subtitle_style || 'Classic';
 
                     // Mode Buttons
-                    const mode = job.meta?.mode || 'AUTO';
+                    const mode = meta?.mode || 'AUTO';
                     document.getElementById('btn-mode-auto').className = `flex-1 py-2 text-[11px] font-medium rounded-md transition-all ${mode === 'AUTO' ? 'bg-white text-black shadow-sm' : 'text-[#666] hover:text-white hover:bg-[#333]'}`;
                     document.getElementById('btn-mode-review').className = `flex-1 py-2 text-[11px] font-medium rounded-md transition-all ${mode === 'REVIEW' ? 'bg-white text-black shadow-sm' : 'text-[#666] hover:text-white hover:bg-[#333]'}`;
 
                     // Approve Button
                     const btnApprove = document.getElementById('btn-approve');
-                    if (job.status === 'Pending Approval') {
+                    if (waitingApproval) {
                         btnApprove.classList.remove('hidden');
                         btnApprove.classList.add('animate-pulse');
                     } else {
@@ -599,8 +843,45 @@
                     }
 
                     // Locking Logic
-                    const isLocked = job.stage === 'Completed' || job.stage === 'Failed';
+                    const isLocked = ['INGEST', 'TRANSLATING', 'REVIEWING', 'FINALIZING', 'BURNING'].includes(stageUpper);
                     updateInspectorState(isLocked);
+
+                    // Output
+                    const outputDiv = document.getElementById('output-section');
+                    const outputPathEl = document.getElementById('output-path');
+                    const downloadBtn = document.getElementById('btn-download-output');
+                    const outputPath = meta.final_output || '';
+                    if (outputPath || stageUpper === 'COMPLETED') {
+                        outputDiv.classList.remove('hidden');
+                        outputPathEl.innerText = outputPath || '(not recorded yet)';
+                        const token = getAdminToken();
+                        const qp = token ? `?admin_token=${encodeURIComponent(token)}` : '';
+                        downloadBtn.href = `/api/output/${encodeURIComponent(job.file_stem)}${qp}`;
+                    } else {
+                        outputDiv.classList.add('hidden');
+                    }
+
+                    // Error / Halt box
+                    const errorBox = document.getElementById('error-box');
+                    const errorTextEl = document.getElementById('error-text');
+                    const haltBadge = document.getElementById('halt-badge');
+                    const unhaltBtn = document.getElementById('btn-unhalt');
+
+                    const lastError = meta.last_error || (halted ? statusText : '');
+                    if (lastError) {
+                        errorBox.classList.remove('hidden');
+                        errorTextEl.innerText = lastError;
+                    } else {
+                        errorBox.classList.add('hidden');
+                    }
+
+                    if (halted) {
+                        haltBadge.classList.remove('hidden');
+                        unhaltBtn.classList.remove('hidden');
+                    } else {
+                        haltBadge.classList.add('hidden');
+                        unhaltBtn.classList.add('hidden');
+                    }
 
                     // Quality Report Logic
                     const reportDiv = document.getElementById('quality-report');
@@ -646,6 +927,45 @@
                     } else {
                         reportDiv.classList.add('hidden');
                     }
+
+                    // Broadcast QA (Caps)
+                    const qaDiv = document.getElementById('broadcast-qa');
+                    const qaCaps = meta?.qa_caps || null;
+                    const fullCaps = qaCaps?.full_caps || 0;
+                    const mostlyCaps = qaCaps?.mostly_caps || 0;
+                    const totalCapsBlocks = qaCaps?.total || 0;
+                    if (qaCaps && (fullCaps > 0 || mostlyCaps > 0)) {
+                        qaDiv.classList.remove('hidden');
+
+                        const badge = document.getElementById('qa-caps-badge');
+                        const issues = fullCaps + mostlyCaps;
+                        badge.innerText = totalCapsBlocks ? `${issues}/${totalCapsBlocks}` : `${issues}`;
+                        if (fullCaps > 0) {
+                            badge.className = "px-2 py-1 rounded bg-red-500/20 text-red-300 text-xs font-bold";
+                        } else {
+                            badge.className = "px-2 py-1 rounded bg-yellow-500/20 text-yellow-300 text-xs font-bold";
+                        }
+
+                        const msg = `Caps warning: ${fullCaps} ALL CAPS + ${mostlyCaps} mostly-caps blocks detected. Use Retry Review → Retry Finalize → Force Burn to regenerate.`;
+                        document.getElementById('qa-caps-text').innerText = msg;
+
+                        const samplesContainer = document.getElementById('qa-caps-samples-container');
+                        const samplesList = document.getElementById('qa-caps-samples');
+                        const samples = qaCaps?.samples || [];
+                        if (Array.isArray(samples) && samples.length > 0) {
+                            samplesContainer.classList.remove('hidden');
+                            samplesList.innerHTML = '';
+                            samples.forEach(sample => {
+                                const li = document.createElement('li');
+                                li.textContent = String(sample);
+                                samplesList.appendChild(li);
+                            });
+                        } else {
+                            samplesContainer.classList.add('hidden');
+                        }
+                    } else {
+                        qaDiv.classList.add('hidden');
+                    }
                 }
 
                 function updateStep(id, isComplete, isActive) {
@@ -668,107 +988,110 @@
                     }
                 }
 
-                async function deleteJob() {
-                    if (!selectedJobId) return;
-                    if (!confirm(`Are you sure you want to delete ${selectedJobId}? This cannot be undone.`)) return;
+                async function runJobAction(action, extra = {}, requireJob = true) {
+                    if (requireJob && !selectedJobId) return null;
+
+                    const payload = { action, ...extra };
+                    if (requireJob) payload.file_stem = selectedJobId;
 
                     try {
-                        const res = await fetch('/api/action', {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({
-                                action: 'delete_job',
-                                file_stem: selectedJobId
-                            })
-                        });
-                        const data = await res.json();
-                        if (data.success) {
-                            log(`Deleted job ${selectedJobId}`);
-                            selectedJobId = null;
-                            selectedStem = null;
-                            document.getElementById('inspector-content').classList.add('hidden');
-                            document.getElementById('inspector-empty').classList.remove('hidden');
-                            fetchJobs();
-                        } else {
-                            log(`Error deleting job: ${data.error}`);
-                        }
+                        const data = await postJson('/api/action', payload);
+                        if (data?.success) log(data.message || `${action}: OK`);
+                        else log(`Error: ${data?.error || data?.message || 'Unknown error'}`);
+                        fetchJobs();
+                        return data;
                     } catch (err) {
                         log(`Network Error: ${err}`);
+                        return null;
                     }
+                }
+
+                async function updateJobSetting(key, value) {
+                    const map = {
+                        target_language: ['set_language', 'target_language'],
+                        program_profile: ['set_profile', 'program_profile'],
+                        subtitle_style: ['set_style', 'subtitle_style'],
+                    };
+                    const entry = map[key];
+                    if (!entry) return;
+                    const [action, param] = entry;
+                    const data = await runJobAction(action, { [param]: value }, true);
+                    if (data?.success) showSaved();
+                }
+
+                async function setMode(mode) {
+                    const data = await runJobAction('set_mode', { mode }, true);
+                    if (data?.success) showSaved();
                 }
 
                 async function approveBurn() {
-                    if (!selectedJobId) return;
-                    try {
-                        const res = await fetch('/api/action', {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ action: 'approve_burn', file_stem: selectedJobId })
-                        });
-                        const data = await res.json();
-                        if (data.success) {
-                            log(data.message || `Burn approved for ${selectedJobId}`);
-                            fetchJobs();
-                        } else {
-                            log(`Error approving burn: ${data.error || data.message || 'Unknown error'}`);
-                        }
-                    } catch (err) {
-                        log(`Network Error: ${err}`);
-                    }
+                    await runJobAction('approve_burn', {}, true);
                 }
 
                 async function resetReview() {
-                    if (!selectedJobId) return;
-                    try {
-                        const res = await fetch('/api/action', {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ action: 'reset_review', file_stem: selectedJobId })
-                        });
-                        const data = await res.json();
-                        if (data.success) {
-                            log(data.message || `Reset queued for ${selectedJobId}`);
-                            fetchJobs();
-                        } else {
-                            log(`Error resetting job: ${data.error || data.message || 'Unknown error'}`);
-                        }
-                    } catch (err) {
-                        log(`Network Error: ${err}`);
-                    }
+                    await runJobAction('reset_review', {}, true);
                 }
 
                 async function forceBurn() {
                     if (!selectedJobId) return;
                     if (!confirm(`Force burn ${selectedJobId}? This will re-render the burned video.`)) return;
-                    try {
-                        const res = await fetch('/api/action', {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ action: 'force_burn', file_stem: selectedJobId })
-                        });
-                        const data = await res.json();
-                        if (data.success) {
-                            log(data.message || `Burn triggered for ${selectedJobId}`);
-                            fetchJobs();
-                        } else {
-                            log(`Error force burning: ${data.error || data.message || 'Unknown error'}`);
-                        }
-                    } catch (err) {
-                        log(`Network Error: ${err}`);
+                    await runJobAction('force_burn', {}, true);
+                }
+
+                async function retryTranslate() {
+                    if (!selectedJobId) return;
+                    if (!confirm(`Retry translation for ${selectedJobId}?`)) return;
+                    await runJobAction('retry_translate', {}, true);
+                }
+
+                async function retryReview() {
+                    if (!selectedJobId) return;
+                    if (!confirm(`Retry AI review for ${selectedJobId}?`)) return;
+                    await runJobAction('retry_review', {}, true);
+                }
+
+                async function unhaltJob() {
+                    if (!selectedJobId) return;
+                    if (!confirm(`Unhalt ${selectedJobId} and resume workflow?`)) return;
+                    await runJobAction('unhalt_job', {}, true);
+                }
+
+                async function restartManager() {
+                    if (!confirm('Restart the Omega Manager? It will restart when safe/idle.')) return;
+                    await runJobAction('restart_manager', {}, false);
+                }
+
+                async function deleteJob() {
+                    if (!selectedJobId) return;
+                    if (!confirm(`Are you sure you want to delete ${selectedJobId}? This cannot be undone.`)) return;
+
+                    const data = await runJobAction('delete_job', {}, true);
+                    if (data?.success) {
+                        selectedJobId = null;
+                        selectedStem = null;
+                        document.getElementById('inspector-content').classList.add('hidden');
+                        document.getElementById('inspector-empty').classList.remove('hidden');
+                        fetchJobs();
                     }
                 }
 
                 function updateInspectorState(locked) {
                     const inspectorContent = document.getElementById('inspector-content');
                     const lockMsg = document.getElementById('lock-msg');
-                    const settings = inspectorContent.querySelectorAll('select, button:not(#btn-approve):not(#btn-mode-auto):not(#btn-mode-review)');
+                    const selects = inspectorContent.querySelectorAll('select');
+                    const modeAuto = document.getElementById('btn-mode-auto');
+                    const modeReview = document.getElementById('btn-mode-review');
 
                     if (locked) {
                         lockMsg.classList.remove('hidden');
-                        settings.forEach(el => el.setAttribute('disabled', 'true'));
+                        selects.forEach(el => el.setAttribute('disabled', 'true'));
+                        if (modeAuto) modeAuto.setAttribute('disabled', 'true');
+                        if (modeReview) modeReview.setAttribute('disabled', 'true');
                     } else {
                         lockMsg.classList.add('hidden');
-                        settings.forEach(el => el.removeAttribute('disabled'));
+                        selects.forEach(el => el.removeAttribute('disabled'));
+                        if (modeAuto) modeAuto.removeAttribute('disabled');
+                        if (modeReview) modeReview.removeAttribute('disabled');
                     }
                 }
             </script>
@@ -785,7 +1108,7 @@
                             class="text-[#888] hover:text-white text-xs uppercase font-bold tracking-wider px-4 py-2">Cancel</button>
                         <button onclick="saveSurgical()"
                             class="bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold uppercase tracking-wider px-6 py-2 rounded-md shadow-lg shadow-emerald-900/20 transition-all">Save
-                            & Polish</button>
+                            & Finalize</button>
                     </div>
                 </div>
 
@@ -835,7 +1158,9 @@
                     // Load Video
                     const video = document.getElementById('surgical-video');
                     const placeholder = document.getElementById('video-placeholder');
-                    video.src = `/api/stream/${currentStem}`;
+                    const token = getAdminToken();
+                    const qp = token ? `?admin_token=${encodeURIComponent(token)}` : '';
+                    video.src = `/api/stream/${currentStem}${qp}`;
                     video.onerror = () => {
                         video.classList.add('hidden');
                         placeholder.classList.remove('hidden');
@@ -846,7 +1171,7 @@
                     };
 
                     try {
-                        const res = await fetch(`/api/surgical/segments?stem=${currentStem}`);
+                        const res = await fetch(`/api/surgical/segments?stem=${currentStem}`, { headers: { ...adminHeaders() } });
                         const data = await res.json();
 
                         if (data.error) throw new Error(data.error);
@@ -931,13 +1256,13 @@
                 async function saveSurgical() {
                     const btn = document.querySelector('button[onclick="saveSurgical()"]');
                     const originalText = btn.innerText;
-                    btn.innerText = "Polishing...";
+                    btn.innerText = "Finalizing...";
                     btn.disabled = true;
 
                     try {
                         const res = await fetch('/api/surgical/save', {
                             method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
+                            headers: { 'Content-Type': 'application/json', ...adminHeaders() },
                             body: JSON.stringify({
                                 stem: currentStem,
                                 segments: currentSegments

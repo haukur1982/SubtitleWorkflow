@@ -120,6 +120,7 @@ def get_system_instruction(lang_code="is", profile_key="standard"):
     --- UNIVERSAL RULES ---
     1. MUSIC: Ignore singing. Output `{lang['music_prompt']}`.
     2. FORMAT: Return JSON array matching input IDs.
+    3. CAPITALIZATION (Broadcast): Use normal sentence case (not ALL CAPS). If the source segment is ALL CAPS, convert it to natural casing. Preserve acronyms/initialisms (e.g., USA, TV, I-690), Bible abbreviations, and mandatory theological titles (e.g., ÉG ER / YO SOY).
     """
     
     return prompt

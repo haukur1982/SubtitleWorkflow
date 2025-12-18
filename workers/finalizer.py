@@ -16,6 +16,54 @@ MIN_DURATION = 1.0      # Minimum 1 second on screen
 IDEAL_CPS = 17          # Characters per second (Netflix standard)
 GAP_SECONDS = 0.1       # Gap between subtitles
 
+def _caps_upper_ratio(text: str) -> tuple[float, int]:
+    letters = [ch for ch in text if ch.isalpha()]
+    if not letters:
+        return 0.0, 0
+    upper = sum(1 for ch in letters if ch.isupper())
+    lower = sum(1 for ch in letters if ch.islower())
+    total = upper + lower
+    if total <= 0:
+        return 0.0, 0
+    return upper / total, total
+
+
+def _collect_caps_warnings(events: list[dict]) -> dict:
+    """
+    Detects suspicious ALL-CAPS / mostly-caps subtitle lines for broadcast QA.
+    """
+    full_caps = 0
+    mostly_caps = 0
+    samples: list[str] = []
+
+    for event in events:
+        lines = event.get("lines") or []
+        text = " ".join([str(line).strip() for line in lines if str(line).strip()]).strip()
+        if not text:
+            continue
+
+        ratio, letter_count = _caps_upper_ratio(text)
+        # Ignore very short strings (likely acronyms).
+        if letter_count < 8:
+            continue
+
+        if ratio >= 0.95:
+            full_caps += 1
+            if len(samples) < 3:
+                samples.append(text[:160])
+        elif ratio >= 0.85:
+            mostly_caps += 1
+            if len(samples) < 3:
+                samples.append(text[:160])
+
+    total = len(events)
+    return {
+        "full_caps": full_caps,
+        "mostly_caps": mostly_caps,
+        "total": total,
+        "samples": samples,
+    }
+
 def format_timestamp(seconds):
     hours = int(seconds // 3600)
     minutes = int((seconds % 3600) // 60)
@@ -292,5 +340,19 @@ def finalize(approved_path: Path, target_language: str = "is"):
     with open(normalized_path, "w", encoding="utf-8") as f:
         json.dump(normalized_payload, f, ensure_ascii=False, indent=2)
     logger.info(f"✅ Created Normalized JSON: {normalized_path.name}")
+
+    # QA: Flag suspicious casing (ALL CAPS) so it can be corrected upstream.
+    try:
+        caps_qa = _collect_caps_warnings(normalized_events)
+        if (caps_qa.get("full_caps") or 0) > 0 or (caps_qa.get("mostly_caps") or 0) > 0:
+            logger.warning(
+                "   ⚠️ QA Caps: %s full-caps, %s mostly-caps (of %s blocks)",
+                caps_qa.get("full_caps"),
+                caps_qa.get("mostly_caps"),
+                caps_qa.get("total"),
+            )
+        omega_db.update(stem, meta={"qa_caps": caps_qa})
+    except Exception as e:
+        logger.warning("   ⚠️ QA Caps check failed: %s", e)
 
     return srt_path, normalized_path
