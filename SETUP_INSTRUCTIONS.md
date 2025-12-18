@@ -43,6 +43,9 @@ ln -s "/Volumes/Extreme SSD/Omega_Work/99_ERRORS" ./99_ERRORS
 sh start_omega.sh
 ```
 
+## Optional: Cloud-First Translation + Editor
+If you want Translation + Chief Editor to run cloud-first (GCS artifacts + cloud worker) while keeping ingest/burn local, see `CLOUD_PIPELINE.md`.
+
 ## Troubleshooting
 - **Dashboard not loading?** Check `http://127.0.0.1:8080`.
 - **Permission errors?** Make sure Terminal has "Full Disk Access" in System Settings if it complains about accessing the external drive.

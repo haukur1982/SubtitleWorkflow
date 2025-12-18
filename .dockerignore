@@ -1,0 +1,46 @@
+.git/
+.DS_Store
+__pycache__/
+.pycache_tmp/
+.venv/
+venv/
+env/
+
+# Local state
+*.db
+*.sqlite
+*.sqlite3
+omega.db
+production.db*
+
+# Secrets
+service_account.json
+credentials.json
+
+# Runtime / large folders
+logs/
+heartbeats/
+checkpoints/
+backups/
+debug_artifacts/
+debug_package/
+legacy/
+legacy_backup/
+
+# Media
+*.mp4
+*.mov
+*.mkv
+*.wav
+*.mp3
+*.m4a
+*.ass
+*.srt
+
+# External-drive symlinks / workflow folders
+1_INBOX/
+2_VAULT/
+3_EDITOR/
+3_TRANSLATED_DONE/
+4_DELIVERY/
+99_ERRORS/

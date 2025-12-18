@@ -1,6 +1,7 @@
 # System
 .DS_Store
 __pycache__/
+.pycache_tmp/
 *.py[cod]
 *$py.class
 .env

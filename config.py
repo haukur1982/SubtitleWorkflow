@@ -119,6 +119,12 @@ MODEL_TRANSLATOR = "gemini-3-pro-preview"  # The "Brain" for Translation
 MODEL_EDITOR = "gemini-3-pro-preview"      # The "Brain" for Review
 GEMINI_LOCATION = "global"                 # Required for Preview models
 
+# --- CLOUD ARTIFACTS (GCS) ---
+# Store per-job JSON artifacts (skeleton/termbook/translation/approved/checkpoints) in GCS.
+# This enables a cloud-first translation/editor pipeline while keeping heavy video work local.
+OMEGA_JOBS_BUCKET = os.environ.get("OMEGA_JOBS_BUCKET", "omega-jobs-subtitle-project")
+OMEGA_JOBS_PREFIX = os.environ.get("OMEGA_JOBS_PREFIX", "jobs")
+
 # Style Map
 STYLE_MAP = {
     "Joyce Meyer": "RUV_BOX",

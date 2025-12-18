@@ -1,16 +1,21 @@
 import time
 import os
 import sys
+import json
 import logging
 import shutil
+import subprocess
 from pathlib import Path
 from datetime import datetime
 from typing import Optional
 import config
 import omega_db
 import system_health
+from gcp_auth import ensure_google_application_credentials
+from gcs_jobs import GcsJobPaths, new_job_id, upload_json, download_json, blob_exists
 from lock_manager import ProcessLock
 from concurrent.futures import ThreadPoolExecutor
+from google.cloud import storage
 
 # Import Workers
 from workers import transcriber, translator, editor, finalizer, publisher
@@ -33,6 +38,10 @@ active_tasks = set()
 failure_counts = {}
 
 MAX_TASK_FAILURES = 5
+
+
+def _cloud_pipeline_enabled() -> bool:
+    return str(os.environ.get("OMEGA_CLOUD_PIPELINE", "")).strip().lower() in {"1", "true", "yes", "on"}
 
 def task_wrapper(stem, task_name, func, *args, **kwargs):
     """
@@ -231,16 +240,108 @@ def process_jobs(executor):
         if stage not in {"TRANSCRIBED", "TRANSLATING"}:
             continue
 
-        # Preflight: translator requires audio; don't thrash retries if it's missing.
-        audio_path = config.VAULT_DIR / "Audio" / f"{stem}.wav"
-        if not audio_path.exists():
-            omega_db.update(stem, status="Blocked: Missing audio", progress=30.0, meta={"blocked_reason": "missing_audio"})
-            continue
+        if not _cloud_pipeline_enabled():
+            # Preflight: local translator requires audio; don't thrash retries if it's missing.
+            audio_path = config.VAULT_DIR / "Audio" / f"{stem}.wav"
+            if not audio_path.exists():
+                omega_db.update(stem, status="Blocked: Missing audio", progress=30.0, meta={"blocked_reason": "missing_audio"})
+                continue
         
         target_language = job.get("target_language", "is")
         
         active_tasks.add(stem)
-        executor.submit(task_wrapper, stem, "Translate", _run_translate, skel, stem, target_language)
+        if _cloud_pipeline_enabled():
+            executor.submit(task_wrapper, stem, "Translate (Cloud)", _run_translate_cloud, skel, stem, target_language)
+        else:
+            executor.submit(task_wrapper, stem, "Translate", _run_translate, skel, stem, target_language)
+
+    # 1b. CLOUD TRANSLATION/REVIEW -> REVIEWED (download approved.json)
+    if _cloud_pipeline_enabled():
+        ensure_google_application_credentials()
+        try:
+            storage_client = storage.Client()
+        except Exception as e:
+            logger.error("❌ Failed to initialize GCS client: %s", e)
+            storage_client = None
+
+        if storage_client:
+            for job_entry in jobs:
+                stem = job_entry.get("file_stem")
+                if not stem:
+                    continue
+
+                stage = (job_entry.get("stage") or "").upper()
+                if stage not in {
+                    "TRANSLATING_CLOUD_SUBMITTED",
+                    "CLOUD_TRANSLATING",
+                    "CLOUD_REVIEWING",
+                }:
+                    continue
+
+                meta = _job_meta(job_entry)
+                if meta.get("halted"):
+                    continue
+
+                cloud_job_id = meta.get("cloud_job_id") or meta.get("gcs_job_id")
+                if not cloud_job_id:
+                    continue
+
+                bucket_name = str(meta.get("cloud_bucket") or config.OMEGA_JOBS_BUCKET).strip()
+                prefix = str(meta.get("cloud_prefix") or config.OMEGA_JOBS_PREFIX).strip()
+                paths = GcsJobPaths(bucket=bucket_name, prefix=prefix, job_id=str(cloud_job_id))
+
+                # Optional: reflect cloud progress into the dashboard.
+                try:
+                    if blob_exists(storage_client, bucket_name, paths.progress_json()):
+                        progress_payload = download_json(
+                            storage_client,
+                            bucket=bucket_name,
+                            blob_name=paths.progress_json(),
+                        )
+                        if isinstance(progress_payload, dict):
+                            status = progress_payload.get("status")
+                            progress = progress_payload.get("progress")
+                            if status or progress is not None:
+                                omega_db.update(
+                                    stem,
+                                    status=str(status) if status else None,
+                                    progress=float(progress) if progress is not None else None,
+                                    meta={"cloud_stage": progress_payload.get("stage")},
+                                )
+                except Exception:
+                    pass
+
+                local_approved = config.TRANSLATED_DONE_DIR / f"{stem}_APPROVED.json"
+                if local_approved.exists():
+                    continue
+
+                try:
+                    if not blob_exists(storage_client, bucket_name, paths.approved_json()):
+                        continue
+                    approved_payload = download_json(
+                        storage_client,
+                        bucket=bucket_name,
+                        blob_name=paths.approved_json(),
+                    )
+                    local_approved.parent.mkdir(parents=True, exist_ok=True)
+                    with open(local_approved, "w", encoding="utf-8") as f:
+                        json.dump(approved_payload, f, indent=2, ensure_ascii=False)
+
+                    omega_db.update(
+                        stem,
+                        stage="REVIEWED",
+                        status="Editor Approved (Cloud)",
+                        progress=70.0,
+                        meta={
+                            "cloud_job_id": str(cloud_job_id),
+                            "cloud_bucket": bucket_name,
+                            "cloud_prefix": prefix,
+                            "cloud_approved_path": str(local_approved),
+                        },
+                    )
+                    logger.info("✅ Cloud approved downloaded: %s", local_approved.name)
+                except Exception as e:
+                    logger.error("❌ Failed to download cloud approval for %s: %s", stem, e)
 
     # 2. TRANSLATED -> REVIEWING (Editor)
     for trans in config.EDITOR_DIR.glob("*.json"):
@@ -383,6 +484,87 @@ def _run_translate(skel, stem, target_language):
     shutil.move(str(skel), str(done_skel))
     
     omega_db.update(stem, stage="TRANSLATED", status="Ready for Review", progress=55.0, meta={"translation_path": str(output_path)})
+
+def _run_translate_cloud(skel, stem, target_language):
+    """
+    Cloud-first path: upload job artifacts to GCS and let the cloud worker do
+    Translation + Chief Editor, writing approved.json back to GCS.
+
+    The local manager polls and downloads the approved payload into
+    TRANSLATED_DONE_DIR, so the existing finalize/burn stages remain unchanged.
+    """
+    logger.info("☁️ Submitting cloud translation: %s (%s)", stem, str(target_language).upper())
+
+    ensure_google_application_credentials()
+
+    bucket_name = config.OMEGA_JOBS_BUCKET
+    prefix = config.OMEGA_JOBS_PREFIX
+    job_id = new_job_id(stem)
+    paths = GcsJobPaths(bucket=bucket_name, prefix=prefix, job_id=job_id)
+
+    storage_client = storage.Client()
+
+    with open(skel, "r", encoding="utf-8") as f:
+        skeleton_payload = json.load(f)
+
+    job = omega_db.get_job(stem) or {}
+    program_profile = (job.get("program_profile") or "standard").strip() or "standard"
+
+    job_payload = {
+        "project_id": "sermon-translator-system",
+        "stem": stem,
+        "target_language_code": str(target_language or "is").strip().lower() or "is",
+        "program_profile": program_profile,
+        "translator_model": config.MODEL_TRANSLATOR,
+        "editor_model": config.MODEL_EDITOR,
+        "created_at": datetime.now().isoformat(),
+    }
+
+    omega_db.update(
+        stem,
+        stage="TRANSLATING_CLOUD_SUBMITTED",
+        status="Uploading to Cloud",
+        progress=40.0,
+        meta={"cloud_job_id": job_id, "cloud_bucket": bucket_name, "cloud_prefix": prefix},
+    )
+
+    upload_json(storage_client, bucket=bucket_name, blob_name=paths.job_json(), payload=job_payload)
+    upload_json(storage_client, bucket=bucket_name, blob_name=paths.skeleton_json(), payload=skeleton_payload)
+    upload_json(
+        storage_client,
+        bucket=bucket_name,
+        blob_name=paths.progress_json(),
+        payload={
+            "stage": "TRANSLATING_CLOUD_SUBMITTED",
+            "status": "Submitted",
+            "progress": 40.0,
+            "updated_at": datetime.now().isoformat(),
+            "meta": job_payload,
+        },
+    )
+
+    # Stop re-triggering from stale skeletons.
+    done_skel = config.VAULT_DATA / f"{stem}_SKELETON_DONE.json"
+    shutil.move(str(skel), str(done_skel))
+
+    omega_db.update(
+        stem,
+        stage="TRANSLATING_CLOUD_SUBMITTED",
+        status="Submitted to Cloud",
+        progress=40.0,
+        meta={
+            "cloud_job_id": job_id,
+            "cloud_bucket": bucket_name,
+            "cloud_prefix": prefix,
+            "cloud_job_gcs": f"gs://{bucket_name}/{paths.job_json()}",
+        },
+    )
+
+    trigger = str(os.environ.get("OMEGA_CLOUD_TRIGGER_COMMAND") or "").strip()
+    if trigger:
+        cmd = trigger.format(job_id=job_id, bucket=bucket_name, prefix=prefix)
+        logger.info("🚀 Triggering cloud worker: %s", cmd)
+        subprocess.run(cmd, shell=True, check=True)
 
 def _run_review(trans, stem):
     logger.info(f"🕵️‍♂️ Reviewing: {stem}")
