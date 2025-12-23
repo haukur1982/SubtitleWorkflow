@@ -60,6 +60,9 @@ GAP_SECONDS = 0.1
 CONTEXT_GAP_MAX = 3.0
 MAX_PRIORITY_SEGMENTS = 120
 
+# Checkpoint validation - prevents stale checkpoints from wrong job/language/profile
+CHECKPOINT_SCHEMA_VERSION = 2
+
 _WORD_RE = re.compile(r"[A-Za-zÀ-ÖØ-öø-ÿÞþÐð]+", re.UNICODE)
 
 
@@ -895,6 +898,38 @@ def _build_continuity_window(
     return merged[-max_items:] if max_items and len(merged) > max_items else merged
 
 
+def _checkpoint_is_valid(
+    checkpoint: Optional[dict],
+    *,
+    job_id: str,
+    target_language_code: str,
+    program_profile: str,
+) -> bool:
+    """
+    Returns True if checkpoint matches current job parameters.
+    
+    If checkpoint is from a different job/language/profile, we discard it
+    to prevent stale translations from leaking into the new run.
+    """
+    if not checkpoint or not isinstance(checkpoint, dict):
+        return False
+    # Schema version check (new field not present in old checkpoints)
+    if checkpoint.get("version", 1) < CHECKPOINT_SCHEMA_VERSION:
+        logger.warning("   ⚠️ Checkpoint schema version mismatch; discarding")
+        return False
+    if str(checkpoint.get("job_id") or "") != str(job_id):
+        logger.warning("   ⚠️ Checkpoint job_id mismatch (%s != %s); discarding",
+                       checkpoint.get("job_id"), job_id)
+        return False
+    if str(checkpoint.get("target_language_code") or "").lower() != str(target_language_code).lower():
+        logger.warning("   ⚠️ Checkpoint target_language_code mismatch; discarding")
+        return False
+    if str(checkpoint.get("program_profile") or "").lower() != str(program_profile).lower():
+        logger.warning("   ⚠️ Checkpoint program_profile mismatch; discarding")
+        return False
+    return True
+
+
 def _lang_name(code: str) -> str:
     mapping = {
         "is": "Icelandic",
@@ -1013,10 +1048,18 @@ def run_job(*, bucket: str, prefix: str, job_id: str) -> None:
     if blob_exists(storage_client, paths.bucket, paths.translation_checkpoint_json()):
         checkpoint = download_json(storage_client, bucket=paths.bucket, blob_name=paths.translation_checkpoint_json())
     translated_map: Dict[str, str] = {}
-    if isinstance(checkpoint, dict):
+    if _checkpoint_is_valid(
+        checkpoint,
+        job_id=job_id,
+        target_language_code=target_language_code,
+        program_profile=program_profile,
+    ):
         raw = checkpoint.get("translated") or {}
         if isinstance(raw, dict):
             translated_map = {str(k): str(v) for k, v in raw.items() if v is not None}
+            logger.info("   ✅ Resumed from valid checkpoint (%d segments)", len(translated_map))
+    elif checkpoint:
+        logger.warning("   ⚠️ Checkpoint discarded; starting fresh translation")
 
     if music_detect:
         _write_progress(
@@ -1113,7 +1156,7 @@ def run_job(*, bucket: str, prefix: str, job_id: str) -> None:
 
             done_count = sum(1 for seg_id in input_ids if str(seg_id) in translated_map)
             checkpoint_payload = {
-                "version": 1,
+                "version": CHECKPOINT_SCHEMA_VERSION,
                 "job_id": job_id,
                 "target_language_code": target_language_code,
                 "program_profile": program_profile,

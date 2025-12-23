@@ -53,10 +53,10 @@ RESTART_FLAG = config.BASE_DIR / "heartbeats" / "omega_manager.restart"
 RESTART_FORCE_FLAG = config.BASE_DIR / "heartbeats" / "omega_manager.restart.force"
 
 STAGE_STALL_THRESHOLDS = {
-    "TRANSLATING": _safe_float_env("OMEGA_STALL_TRANSLATING", 14400.0),
-    "TRANSLATING_CLOUD_SUBMITTED": _safe_float_env("OMEGA_STALL_CLOUD_SUBMITTED", 14400.0),
-    "CLOUD_TRANSLATING": _safe_float_env("OMEGA_STALL_CLOUD", 14400.0),
-    "CLOUD_REVIEWING": _safe_float_env("OMEGA_STALL_CLOUD", 14400.0),
+    "TRANSLATING": _safe_float_env("OMEGA_STALL_TRANSLATING", 5400.0),
+    "TRANSLATING_CLOUD_SUBMITTED": _safe_float_env("OMEGA_STALL_CLOUD_SUBMITTED", 5400.0),
+    "CLOUD_TRANSLATING": _safe_float_env("OMEGA_STALL_CLOUD", 5400.0),
+    "CLOUD_REVIEWING": _safe_float_env("OMEGA_STALL_CLOUD_REVIEWING", 7200.0),
     "REVIEWING": _safe_float_env("OMEGA_STALL_REVIEWING", 10800.0),
     "FINALIZING": _safe_float_env("OMEGA_STALL_FINALIZING", 10800.0),
     "BURNING": _safe_float_env("OMEGA_STALL_BURNING", 21600.0),

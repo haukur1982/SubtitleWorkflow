@@ -1,3 +1,9 @@
+# ===============================================================
+# LEGACY: This file is only used when OMEGA_CLOUD_PIPELINE=0
+# Primary translation now runs via omega_cloud_worker.py in Cloud Run
+# See CLOUD_PIPELINE.md for the active architecture.
+# ===============================================================
+
 import os
 import json
 import time
@@ -312,9 +318,16 @@ def process_translation(json_file: Path):
             print(f"      ⚠️ GCS Blob Deletion Failed: {e}")
 
 if __name__ == "__main__":
+    # Guard: Exit if cloud pipeline is active
+    if os.environ.get("OMEGA_CLOUD_PIPELINE", "").strip().lower() in {"1", "true", "yes", "on"}:
+        print("⚠️ cloud_brain.py is LEGACY. OMEGA_CLOUD_PIPELINE=1 detected.")
+        print("   Primary translation runs via omega_cloud_worker.py in Cloud Run.")
+        print("   To use this local translator, set OMEGA_CLOUD_PIPELINE=0")
+        raise SystemExit(0)
+    
     # lock = ProcessLock("cloud_brain")
     # with lock:
-    print("✅ Cloud Brain Active (Translator Only)")
+    print("✅ Cloud Brain Active (Legacy Local Translator)")
     while True:
         system_health.update_heartbeat("cloud_brain")
         if ensure_credentials():
