@@ -238,6 +238,10 @@ def _translate_batch_once(
     target_language: str,
     program_profile: str,
 ) -> list[dict]:
+    terminology_note = ""
+    if target_language.lower() in {"icelandic", "is"}:
+        terminology_note = '    - Terminology: "Pastor" -> "Prestur".\n'
+
     prompt = f"""
     TRANSLATE these segments to {target_language} (Profile: {program_profile}).
     Return ONLY JSON.
@@ -246,6 +250,15 @@ def _translate_batch_once(
     - Do NOT output ALL CAPS sentences.
     - If the source text is ALL CAPS, convert to natural sentence case.
     - Preserve acronyms/initialisms (e.g., USA, TV, I-690) and required theological titles (e.g., ÉG ER / YO SOY).
+
+    ASR CLEANUP:
+    - Fix obvious speech-to-text errors in the SOURCE when the intended word is clear.
+    - If uncertain, keep the original wording.
+    
+    MUSIC:
+    - Only output (MUSIC) for pure singing/lyrics or instrumental with no speech.
+    - If speech is present over music, translate the speech and do NOT output (MUSIC).
+{terminology_note}
 
     INPUT:
     {json.dumps(batch, ensure_ascii=False)}
@@ -406,7 +419,9 @@ def create_context_cache(gcs_uri: str, stem: str, target_language: str = "Icelan
         "english": "en",
         "spanish": "es",
         "french": "fr",
-        "german": "de"
+        "german": "de",
+        "portuguese": "pt",
+        "italian": "it",
     }
     lang_code = lang_map.get(target_language.lower(), target_language.lower())
     
@@ -454,7 +469,9 @@ def translate(transcription_path: Path, target_language_code: str = "is", progra
         "en": "English",
         "es": "Spanish",
         "fr": "French",
-        "de": "German"
+        "de": "German",
+        "pt": "Portuguese",
+        "it": "Italian",
     }
     target_language = lang_map.get(target_language_code, "Icelandic")
 

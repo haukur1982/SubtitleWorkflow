@@ -2,6 +2,7 @@ import os
 import shutil
 import time
 import logging
+import site
 from pathlib import Path
 
 # --- BASE PATHS ---
@@ -43,17 +44,38 @@ def _safe_mkdir(path: Path) -> None:
 
 
 # Ensure directories exist (when storage is ready)
-for d in [INBOX_DIR, VAULT_DATA, VAULT_VIDEOS, PROXIES_DIR, EDITOR_DIR, TRANSLATED_DONE_DIR, SRT_DIR, VIDEO_DIR, ERROR_DIR]:
+for d in [
+    INBOX_DIR,
+    VAULT_DATA,
+    VAULT_VIDEOS,
+    PROXIES_DIR,
+    EDITOR_DIR,
+    TRANSLATED_DONE_DIR,
+    SRT_DIR,
+    VIDEO_DIR,
+    ERROR_DIR,
+    INBOX_DIR / "03_REMOTE_REVIEW" / "Classic",
+    INBOX_DIR / "03_REMOTE_REVIEW" / "Modern_Look",
+    INBOX_DIR / "03_REMOTE_REVIEW" / "Apple_TV",
+]:
     _safe_mkdir(d)
 
 # --- BINARIES ---
 def get_binary(name, default):
     path = shutil.which(name)
-    return path if path else default
+    if path:
+        return path
+    try:
+        user_bin = Path(site.getuserbase()) / "bin" / name
+        if user_bin.exists():
+            return str(user_bin)
+    except Exception:
+        pass
+    return default
 
 FFMPEG_BIN = get_binary("ffmpeg", "ffmpeg")
 FFPROBE_BIN = get_binary("ffprobe", "ffprobe")
-WHISPER_BIN = get_binary("whisperx", "whisperx")
+WHISPER_BIN = os.environ.get("OMEGA_WHISPER_BIN", "").strip() or get_binary("whisperx", "whisperx")
 
 # --- STORAGE READINESS ---
 _WRITE_PROBE_CACHE = {}
@@ -117,6 +139,7 @@ WHISPER_DEVICE = "cpu"
 # ⚠️ CRITICAL: NEVER USE GEMINI 1.5. IT IS BANNED.
 MODEL_TRANSLATOR = "gemini-3-pro-preview"  # The "Brain" for Translation
 MODEL_EDITOR = "gemini-3-pro-preview"      # The "Brain" for Review
+MODEL_POLISH = os.environ.get("OMEGA_MODEL_POLISH", MODEL_TRANSLATOR).strip() or MODEL_TRANSLATOR
 GEMINI_LOCATION = "global"                 # Required for Preview models
 
 # --- CLOUD ARTIFACTS (GCS) ---
@@ -124,6 +147,8 @@ GEMINI_LOCATION = "global"                 # Required for Preview models
 # This enables a cloud-first translation/editor pipeline while keeping heavy video work local.
 OMEGA_JOBS_BUCKET = os.environ.get("OMEGA_JOBS_BUCKET", "omega-jobs-subtitle-project")
 OMEGA_JOBS_PREFIX = os.environ.get("OMEGA_JOBS_PREFIX", "jobs")
+OMEGA_CLOUD_POLISH_MODE = os.environ.get("OMEGA_CLOUD_POLISH_MODE", "review").strip().lower()
+OMEGA_CLOUD_MUSIC_DETECT = os.environ.get("OMEGA_CLOUD_MUSIC_DETECT", "1").strip().lower() in {"1", "true", "yes", "on"}
 
 # Optional: when set, the local manager will trigger a Cloud Run Job execution
 # automatically after uploading job artifacts to GCS (no manual worker run).

@@ -2,6 +2,28 @@
 
 echo "🛑 Stopping all OmegaTV processes..."
 
+# Kill Watchdog
+WATCHDOG_PID_FILE="/tmp/omega_watchdog.pid"
+if [ -f "$WATCHDOG_PID_FILE" ]; then
+    pid=$(cat "$WATCHDOG_PID_FILE" 2>/dev/null)
+    if [ -n "$pid" ]; then
+        echo "   Killing watchdog PID: $pid"
+        kill -9 "$pid" 2>/dev/null
+    fi
+    rm -f "$WATCHDOG_PID_FILE"
+fi
+
+# Kill Caffeinate (sleep prevention)
+CAFFEINATE_PID_FILE="/tmp/omega_caffeinate.pid"
+if [ -f "$CAFFEINATE_PID_FILE" ]; then
+    pid=$(cat "$CAFFEINATE_PID_FILE" 2>/dev/null)
+    if [ -n "$pid" ]; then
+        echo "   Killing caffeinate PID: $pid"
+        kill -9 "$pid" 2>/dev/null
+    fi
+    rm -f "$CAFFEINATE_PID_FILE"
+fi
+
 # Kill Dashboard (and all Python processes running dashboard.py)
 pids=$(ps aux | grep "[d]ashboard.py" | awk '{print $2}')
 if [ -n "$pids" ]; then

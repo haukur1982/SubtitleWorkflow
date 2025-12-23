@@ -93,6 +93,35 @@ def update(
         c.execute("BEGIN IMMEDIATE")
         
         now = datetime.now().isoformat()
+
+        def _normalize_timeline(value):
+            if isinstance(value, list):
+                return [item for item in value if isinstance(item, dict)]
+            return []
+
+        def _append_stage_timeline(timeline, stage_value, now_value):
+            if not stage_value:
+                return timeline, False
+            timeline = list(timeline)
+            last = timeline[-1] if timeline else None
+            if last and last.get("stage") == stage_value and not last.get("ended_at"):
+                return timeline, False
+            if last and not last.get("ended_at"):
+                last["ended_at"] = now_value
+            timeline.append({"stage": stage_value, "started_at": now_value, "ended_at": None})
+            return timeline, True
+
+        def _append_status_timeline(timeline, status_value, now_value, max_items=50):
+            if not status_value:
+                return timeline, False
+            timeline = list(timeline)
+            last = timeline[-1] if timeline else None
+            if last and last.get("status") == status_value:
+                return timeline, False
+            timeline.append({"status": status_value, "at": now_value})
+            if max_items and len(timeline) > max_items:
+                timeline = timeline[-max_items:]
+            return timeline, True
         
         # Check if exists
         c.execute("SELECT * FROM jobs WHERE file_stem=?", (file_stem,))
@@ -105,10 +134,41 @@ def update(
                 existing_meta = json.loads(exists[5]) if exists[5] else {}
             except Exception:
                 existing_meta = {}
+            existing_stage = exists[1]
+            existing_status = exists[2]
                 
             # Build dynamic update query
             fields = []
             values = []
+            meta_changed = False
+
+            incoming_meta = meta if isinstance(meta, dict) else {}
+            merged_meta = {**existing_meta, **incoming_meta}
+
+            if stage is not None:
+                timeline = _normalize_timeline(merged_meta.get("stage_timeline"))
+                timeline, changed = _append_stage_timeline(timeline, stage, now)
+                if changed or (timeline and timeline != merged_meta.get("stage_timeline")):
+                    merged_meta["stage_timeline"] = timeline
+                    meta_changed = True
+
+            if status is not None:
+                timeline = _normalize_timeline(merged_meta.get("status_timeline"))
+                if not timeline and existing_status:
+                    timeline.append({"status": existing_status, "at": now})
+                timeline, changed = _append_status_timeline(timeline, status, now)
+                if changed or (timeline and timeline != merged_meta.get("status_timeline")):
+                    merged_meta["status_timeline"] = timeline
+                    meta_changed = True
+
+            incoming_cloud_stage = incoming_meta.get("cloud_stage") if incoming_meta else None
+            if incoming_cloud_stage:
+                timeline = _normalize_timeline(merged_meta.get("cloud_stage_timeline"))
+                timeline, changed = _append_stage_timeline(timeline, str(incoming_cloud_stage), now)
+                if changed or (timeline and timeline != merged_meta.get("cloud_stage_timeline")):
+                    merged_meta["cloud_stage_timeline"] = timeline
+                    meta_changed = True
+
             if stage is not None:
                 fields.append("stage=?")
                 values.append(stage)
@@ -118,9 +178,7 @@ def update(
             if progress is not None:
                 fields.append("progress=?")
                 values.append(progress)
-            if meta is not None:
-                # Merge meta dicts so we don't lose previously stored fields
-                merged_meta = {**existing_meta, **meta}
+            if meta is not None or meta_changed:
                 fields.append("meta=?")
                 values.append(json.dumps(merged_meta))
             if target_language is not None:
@@ -146,10 +204,25 @@ def update(
             
         else:
             # Insert new
+            new_meta = meta if isinstance(meta, dict) else {}
+            stage_value = stage or "QUEUED"
+            timeline = _normalize_timeline(new_meta.get("stage_timeline"))
+            timeline, _ = _append_stage_timeline(timeline, stage_value, now)
+            new_meta["stage_timeline"] = timeline
+
+            status_value = status or "Initialized"
+            timeline = _normalize_timeline(new_meta.get("status_timeline"))
+            timeline, _ = _append_status_timeline(timeline, status_value, now)
+            new_meta["status_timeline"] = timeline
+            incoming_cloud_stage = new_meta.get("cloud_stage")
+            if incoming_cloud_stage:
+                timeline = _normalize_timeline(new_meta.get("cloud_stage_timeline"))
+                timeline, _ = _append_stage_timeline(timeline, str(incoming_cloud_stage), now)
+                new_meta["cloud_stage_timeline"] = timeline
             c.execute('''
                 INSERT INTO jobs (file_stem, stage, status, progress, updated_at, meta, target_language, program_profile, subtitle_style, editor_report)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ''', (file_stem, stage or "QUEUED", status or "Initialized", progress or 0.0, now, json.dumps(meta or {}), target_language or 'is', program_profile or 'standard', subtitle_style or 'Classic', editor_report))
+            ''', (file_stem, stage or "QUEUED", status or "Initialized", progress or 0.0, now, json.dumps(new_meta), target_language or 'is', program_profile or 'standard', subtitle_style or 'Classic', editor_report))
             
         c.execute("COMMIT")
         
@@ -198,9 +271,10 @@ def get_job(file_stem):
     if row:
         job = dict(row)
         try:
-            job["meta"] = json.loads(job["meta"]) if job["meta"] else {}
-        except:
-            job["meta"] = {}
+            meta = json.loads(job.get("meta") or "{}")
+        except Exception:
+            meta = {}
+        job["meta"] = meta if isinstance(meta, dict) else {}
         return job
     return None
 

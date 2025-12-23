@@ -5,14 +5,16 @@ import json
 import logging
 import shutil
 import subprocess
+import secrets
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional
 import config
 import omega_db
 import system_health
 from gcp_auth import ensure_google_application_credentials
 from gcs_jobs import GcsJobPaths, new_job_id, upload_json, download_json, blob_exists
+from email_utils import send_email
 from cloud_run_jobs import run_cloud_run_job
 from lock_manager import ProcessLock
 from concurrent.futures import ThreadPoolExecutor
@@ -40,9 +42,227 @@ failure_counts = {}
 
 MAX_TASK_FAILURES = 5
 
+def _safe_float_env(name: str, default: float) -> float:
+    try:
+        return float(os.environ.get(name, default))
+    except Exception:
+        return default
+
+INGEST_STALL_SECONDS = _safe_float_env("OMEGA_INGEST_STALL_SECONDS", 1800.0)
+RESTART_FLAG = config.BASE_DIR / "heartbeats" / "omega_manager.restart"
+RESTART_FORCE_FLAG = config.BASE_DIR / "heartbeats" / "omega_manager.restart.force"
+
+STAGE_STALL_THRESHOLDS = {
+    "TRANSLATING": _safe_float_env("OMEGA_STALL_TRANSLATING", 14400.0),
+    "TRANSLATING_CLOUD_SUBMITTED": _safe_float_env("OMEGA_STALL_CLOUD_SUBMITTED", 14400.0),
+    "CLOUD_TRANSLATING": _safe_float_env("OMEGA_STALL_CLOUD", 14400.0),
+    "CLOUD_REVIEWING": _safe_float_env("OMEGA_STALL_CLOUD", 14400.0),
+    "REVIEWING": _safe_float_env("OMEGA_STALL_REVIEWING", 10800.0),
+    "FINALIZING": _safe_float_env("OMEGA_STALL_FINALIZING", 10800.0),
+    "BURNING": _safe_float_env("OMEGA_STALL_BURNING", 21600.0),
+}
+
 
 def _cloud_pipeline_enabled() -> bool:
     return str(os.environ.get("OMEGA_CLOUD_PIPELINE", "")).strip().lower() in {"1", "true", "yes", "on"}
+
+def _is_truthy(value: object) -> bool:
+    if isinstance(value, bool):
+        return value
+    return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+def _polish_pass_enabled(meta: dict) -> bool:
+    mode = str(getattr(config, "OMEGA_CLOUD_POLISH_MODE", "review") or "review").strip().lower()
+    if mode in {"0", "false", "off", "no"}:
+        return False
+    if mode in {"1", "true", "yes", "on", "all"}:
+        return True
+    if not isinstance(meta, dict):
+        return False
+    return bool(meta.get("review_required")) or str(meta.get("mode") or "").upper() == "REVIEW"
+
+def _review_portal_url() -> str:
+    return str(os.environ.get("OMEGA_REVIEW_PORTAL_URL", "") or "").strip()
+
+def _reviewer_emails(meta: dict) -> list[str]:
+    if isinstance(meta, dict):
+        value = meta.get("reviewer_email")
+        if value:
+            return [v.strip() for v in str(value).replace(";", ",").split(",") if v.strip()]
+    value = os.environ.get("OMEGA_REVIEWER_EMAIL", "")
+    return [v.strip() for v in str(value).replace(";", ",").split(",") if v.strip()]
+
+def _parse_iso(value: str) -> Optional[datetime]:
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value)
+    except Exception:
+        return None
+
+def _stage_started_at(meta: dict, stage: str) -> Optional[datetime]:
+    if not isinstance(meta, dict) or not stage:
+        return None
+    timeline = meta.get("stage_timeline")
+    if not isinstance(timeline, list):
+        return None
+    for item in reversed(timeline):
+        if not isinstance(item, dict):
+            continue
+        if str(item.get("stage", "")).upper() != stage.upper():
+            continue
+        started_at = item.get("started_at")
+        parsed = _parse_iso(started_at) if isinstance(started_at, str) else None
+        if parsed:
+            return parsed
+    return None
+
+def _status_is_blocked(status: str) -> bool:
+    if not status:
+        return False
+    lowered = status.lower()
+    if "waiting" in lowered:
+        return True
+    if "blocked" in lowered:
+        return True
+    if "paused" in lowered:
+        return True
+    return False
+
+def _request_manager_restart(force: bool = False) -> None:
+    try:
+        RESTART_FLAG.parent.mkdir(exist_ok=True)
+        RESTART_FLAG.touch()
+        if force:
+            RESTART_FORCE_FLAG.touch()
+    except Exception:
+        pass
+
+def _find_vault_video(stem: str) -> Optional[Path]:
+    try:
+        candidates = sorted(config.VAULT_VIDEOS.glob(f"{stem}.*"))
+    except Exception:
+        candidates = []
+    for candidate in candidates:
+        if candidate.is_file() and not candidate.name.startswith("._"):
+            return candidate
+    return None
+
+def _run_ingest_recovery(stem: str, video_path: Optional[Path]) -> None:
+    omega_db.update(
+        stem,
+        stage="INGEST",
+        status="Recovery: re-running transcription",
+        progress=12.0,
+    )
+    if video_path and video_path.exists():
+        transcriber.run(video_path)
+    else:
+        audio_path = config.VAULT_DIR / "Audio" / f"{stem}.wav"
+        if not audio_path.exists():
+            raise FileNotFoundError(f"Recovery failed: audio missing for {stem}")
+        transcriber.transcribe(audio_path)
+    omega_db.update(stem, stage="TRANSCRIBED", status="Ready for Translation", progress=30.0)
+
+def _cloud_job_paths(meta: dict) -> tuple[Optional[GcsJobPaths], Optional[str], Optional[str]]:
+    if not isinstance(meta, dict):
+        return None, None, None
+    cloud_job_id = meta.get("cloud_job_id") or meta.get("gcs_job_id")
+    if not cloud_job_id:
+        return None, None, None
+    bucket_name = str(meta.get("cloud_bucket") or config.OMEGA_JOBS_BUCKET).strip()
+    prefix = str(meta.get("cloud_prefix") or config.OMEGA_JOBS_PREFIX).strip()
+    return GcsJobPaths(bucket=bucket_name, prefix=prefix, job_id=str(cloud_job_id)), bucket_name, prefix
+
+def _build_review_payload(
+    *,
+    stem: str,
+    approved_path: Path,
+    target_language: str,
+    program_profile: str,
+) -> dict:
+    with open(approved_path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+    segments = data.get("segments", data) if isinstance(data, dict) else data
+    payload_segments = []
+    for seg in segments or []:
+        try:
+            seg_id = int(seg.get("id"))
+        except Exception:
+            continue
+        payload_segments.append(
+            {
+                "id": seg_id,
+                "start": seg.get("start"),
+                "end": seg.get("end"),
+                "source": seg.get("source_text") or seg.get("source") or "",
+                "translation": seg.get("text") or "",
+            }
+        )
+    return {
+        "stem": stem,
+        "target_language": target_language,
+        "program_profile": program_profile,
+        "created_at": datetime.utcnow().isoformat() + "Z",
+        "segments": payload_segments,
+    }
+
+def _send_review_email(*, stem: str, review_url: str, recipients: list[str]) -> bool:
+    subject = f"Omega Review Needed: {stem}"
+    body = (
+        f"Hello!\\n\\n"
+        f"A translation is ready for your review. Please open the link below, edit any lines that need fixing, and click Submit.\\n\\n"
+        f"{review_url}\\n\\n"
+        f"Thank you!\\n"
+    )
+    return send_email(subject=subject, body=body, to_addrs=recipients)
+
+def _apply_remote_corrections(*, approved_path: Path, corrections: list[dict]) -> tuple[int, int]:
+    if not corrections:
+        return 0, 0
+    with open(approved_path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+    segments = data.get("segments", data) if isinstance(data, dict) else data
+    if not isinstance(segments, list):
+        return 0, 0
+
+    correction_map: dict[int, str] = {}
+    comment_count = 0
+    for item in corrections:
+        if not isinstance(item, dict):
+            continue
+        try:
+            seg_id = int(item.get("id"))
+        except Exception:
+            continue
+        text = item.get("text")
+        if isinstance(text, str) and text.strip():
+            correction_map[seg_id] = text.strip()
+        comment = item.get("comment")
+        if isinstance(comment, str) and comment.strip():
+            comment_count += 1
+
+    applied = 0
+    for seg in segments:
+        try:
+            seg_id = int(seg.get("id"))
+        except Exception:
+            continue
+        if seg_id in correction_map:
+            seg["text"] = correction_map[seg_id]
+            applied += 1
+
+    if isinstance(data, dict):
+        data["segments"] = segments
+
+    with open(approved_path, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2, ensure_ascii=False)
+
+    return applied, comment_count
+
+def _is_hidden_artifact(path: Path) -> bool:
+    name = path.name
+    return name.startswith("._") or name.startswith(".")
 
 def task_wrapper(stem, task_name, func, *args, **kwargs):
     """
@@ -122,6 +342,10 @@ def ingest_new_files(executor):
         config.INBOX_DIR / "02_HUMAN_REVIEW" / "Classic": ("REVIEW", "Classic"),
         config.INBOX_DIR / "02_HUMAN_REVIEW" / "Modern_Look": ("REVIEW", "Modern"),
         config.INBOX_DIR / "02_HUMAN_REVIEW" / "Apple_TV": ("REVIEW", "Apple"),
+        # Remote Review (email reviewer)
+        config.INBOX_DIR / "03_REMOTE_REVIEW" / "Classic": ("REMOTE_REVIEW", "Classic"),
+        config.INBOX_DIR / "03_REMOTE_REVIEW" / "Modern_Look": ("REMOTE_REVIEW", "Modern"),
+        config.INBOX_DIR / "03_REMOTE_REVIEW" / "Apple_TV": ("REMOTE_REVIEW", "Apple"),
     }
     
     for folder, (mode, style) in WATCH_MAP.items():
@@ -153,12 +377,17 @@ def ingest_new_files(executor):
 def _run_ingest(file_path, mode, style):
     stem = file_path.stem
     try:
+        source_path = str(file_path)
+        review_required = (mode in {"REVIEW", "REMOTE_REVIEW"}) or ("/02_human_review/" in source_path.lower())
+        remote_review_required = (mode == "REMOTE_REVIEW") or ("/03_remote_review/" in source_path.lower())
         # 1. Init DB
         meta = {
             "original_filename": file_path.name,
-            "mode": mode,
+            "mode": "REVIEW" if review_required else "AUTO",
             "style": style,
-            "source_path": str(file_path),
+            "source_path": source_path,
+            "review_required": review_required,
+            "remote_review_required": remote_review_required,
             "ingest_time": publisher.iso_now()
         }
         omega_db.update(stem, stage="INGEST", status="Processing Audio", progress=10.0, meta=meta, subtitle_style=style)
@@ -203,15 +432,131 @@ def process_jobs(executor):
         if final_path and final_path.exists():
             if (job.get("stage") or "").upper() != "COMPLETED":
                 logger.info(f"✅ Auto-correcting {stem}: output exists at {final_path}")
-                omega_db.update(stem, stage="COMPLETED", status="Done", progress=100.0)
+                omega_db.update(
+                    stem,
+                    stage="COMPLETED",
+                    status="Done",
+                    progress=100.0,
+                    meta={"last_error": "", "failed_at": ""},
+                )
             return True
         return False
 
     jobs = omega_db.get_all_jobs()
     jobs_by_stem = {j.get("file_stem"): j for j in jobs if j.get("file_stem")}
 
+    # 0.5 Detect stalled stages and trigger recovery/restart
+    now = datetime.now()
+    for stem, job in jobs_by_stem.items():
+        if not stem:
+            continue
+        stage = str(job.get("stage") or "").upper()
+        threshold = STAGE_STALL_THRESHOLDS.get(stage)
+        if not threshold:
+            continue
+        status = str(job.get("status") or "")
+        if _status_is_blocked(status):
+            continue
+        meta = _job_meta(job)
+        if meta.get("halted"):
+            continue
+
+        started_at = _stage_started_at(meta, stage)
+        if not started_at:
+            started_at = _parse_iso(job.get("updated_at"))
+        cloud_progress_at = None
+        if stage in {"TRANSLATING_CLOUD_SUBMITTED", "CLOUD_TRANSLATING", "CLOUD_REVIEWING"}:
+            cloud_progress = meta.get("cloud_progress") if isinstance(meta.get("cloud_progress"), dict) else {}
+            cloud_progress_at = _parse_iso(cloud_progress.get("updated_at")) if isinstance(cloud_progress, dict) else None
+        elapsed = None
+        if cloud_progress_at:
+            elapsed = (now - cloud_progress_at).total_seconds()
+        elif started_at:
+            elapsed = (now - started_at).total_seconds()
+        if elapsed is None:
+            continue
+        if elapsed < threshold:
+            continue
+
+        stall_count = int(meta.get("stall_restart_count") or 0)
+        if stall_count >= MAX_TASK_FAILURES:
+            omega_db.update(
+                stem,
+                stage="DEAD",
+                status=f"DEAD: stalled in {stage}",
+                progress=0,
+                meta={
+                    "halted": True,
+                    "halted_at": datetime.now().isoformat(),
+                    "halt_reason": f"stalled in {stage}",
+                    "stall_detected_at": datetime.now().isoformat(),
+                },
+            )
+            continue
+
+        if stage in {"TRANSLATING_CLOUD_SUBMITTED", "CLOUD_TRANSLATING", "CLOUD_REVIEWING"}:
+            omega_db.update(
+                stem,
+                stage="TRANSLATING_CLOUD_SUBMITTED",
+                status="Cloud stalled; re-triggering",
+                progress=40.0,
+                meta={
+                    "cloud_run_execution": "",
+                    "cloud_trigger_last_attempt": 0,
+                    "cloud_trigger_attempts": int(meta.get("cloud_trigger_attempts") or 0) + 1,
+                    "cloud_stall_detected_at": datetime.now().isoformat(),
+                    "stall_restart_count": stall_count + 1,
+                },
+            )
+            continue
+
+        omega_db.update(
+            stem,
+            status=f"Stalled in {stage}; restarting manager",
+            progress=0,
+            meta={
+                "stall_stage": stage,
+                "stall_detected_at": datetime.now().isoformat(),
+                "stall_restart_count": stall_count + 1,
+            },
+        )
+        _request_manager_restart(force=True)
+
+    # 0. Recover stalled ingest jobs (video already moved to Vault)
+    now = datetime.now()
+    for stem, job in jobs_by_stem.items():
+        if not stem:
+            continue
+        if (job.get("stage") or "").upper() != "INGEST":
+            continue
+        if stem in active_tasks:
+            continue
+        if is_in_cooldown(stem):
+            continue
+        meta = _job_meta(job)
+        if meta.get("halted"):
+            continue
+        updated_at = _parse_iso(job.get("updated_at"))
+        if not updated_at:
+            continue
+        if (now - updated_at).total_seconds() < INGEST_STALL_SECONDS:
+            continue
+
+        skel_path = config.VAULT_DATA / f"{stem}_SKELETON.json"
+        if skel_path.exists():
+            logger.warning("⚠️ Ingest stalled for %s but skeleton exists. Advancing stage.", stem)
+            omega_db.update(stem, stage="TRANSCRIBED", status="Ready for Translation", progress=30.0)
+            continue
+
+        video_path = _find_vault_video(stem)
+        logger.warning("⚠️ Ingest stalled for %s. Re-running transcription from Vault.", stem)
+        active_tasks.add(stem)
+        executor.submit(task_wrapper, stem, "IngestRecovery", _run_ingest_recovery, stem, video_path)
+
     # 1. TRANSCRIBED -> TRANSLATING
     for skel in config.VAULT_DATA.glob("*_SKELETON.json"):
+        if _is_hidden_artifact(skel):
+            continue
         stem = skel.stem.replace("_SKELETON", "")
         if stem in active_tasks: continue
         if is_in_cooldown(stem): continue
@@ -356,14 +701,39 @@ def process_jobs(executor):
                             status = progress_payload.get("status")
                             progress = progress_payload.get("progress")
                             if status or progress is not None:
+                                cloud_progress = {
+                                    "stage": progress_payload.get("stage"),
+                                    "status": status,
+                                    "progress": progress,
+                                    "updated_at": progress_payload.get("updated_at"),
+                                    "meta": progress_payload.get("meta") if isinstance(progress_payload.get("meta"), dict) else {},
+                                }
                                 omega_db.update(
                                     stem,
                                     status=str(status) if status else None,
                                     progress=float(progress) if progress is not None else None,
-                                    meta={"cloud_stage": progress_payload.get("stage")},
+                                    meta={
+                                        "cloud_stage": progress_payload.get("stage"),
+                                        "cloud_progress": cloud_progress,
+                                        "cloud_last_poll_at": datetime.now().isoformat(),
+                                    },
                                 )
                 except Exception:
                     pass
+
+                # Pull editor report as soon as it's available.
+                if not job_entry.get("editor_report"):
+                    try:
+                        if blob_exists(storage_client, bucket_name, paths.editor_report_json()):
+                            report_payload = download_json(
+                                storage_client,
+                                bucket=bucket_name,
+                                blob_name=paths.editor_report_json(),
+                            )
+                            omega_db.update(stem, editor_report=json.dumps(report_payload or {}))
+                            logger.info("✅ Cloud editor report downloaded: %s", paths.editor_report_json())
+                    except Exception as e:
+                        logger.error("❌ Failed to download cloud editor report for %s: %s", stem, e)
 
                 local_approved = config.TRANSLATED_DONE_DIR / f"{stem}_APPROVED.json"
                 if local_approved.exists():
@@ -397,8 +767,37 @@ def process_jobs(executor):
                 except Exception as e:
                     logger.error("❌ Failed to download cloud approval for %s: %s", stem, e)
 
+            # Backfill editor reports for cloud-completed jobs that already advanced stages.
+            for job_entry in jobs:
+                stem = job_entry.get("file_stem")
+                if not stem or job_entry.get("editor_report"):
+                    continue
+                meta = _job_meta(job_entry)
+                if meta.get("cloud_stage") != "CLOUD_DONE":
+                    continue
+                cloud_job_id = meta.get("cloud_job_id") or meta.get("gcs_job_id")
+                if not cloud_job_id:
+                    continue
+                bucket_name = str(meta.get("cloud_bucket") or config.OMEGA_JOBS_BUCKET).strip()
+                prefix = str(meta.get("cloud_prefix") or config.OMEGA_JOBS_PREFIX).strip()
+                paths = GcsJobPaths(bucket=bucket_name, prefix=prefix, job_id=str(cloud_job_id))
+                try:
+                    if not blob_exists(storage_client, bucket_name, paths.editor_report_json()):
+                        continue
+                    report_payload = download_json(
+                        storage_client,
+                        bucket=bucket_name,
+                        blob_name=paths.editor_report_json(),
+                    )
+                    omega_db.update(stem, editor_report=json.dumps(report_payload or {}))
+                    logger.info("✅ Cloud editor report backfilled: %s", paths.editor_report_json())
+                except Exception as e:
+                    logger.error("❌ Failed to backfill cloud editor report for %s: %s", stem, e)
+
     # 2. TRANSLATED -> REVIEWING (Editor)
     for trans in config.EDITOR_DIR.glob("*.json"):
+        if _is_hidden_artifact(trans):
+            continue
         if trans.name.endswith("_SKELETON.json"): continue
         if trans.name.endswith("_APPROVED.json"): continue
         
@@ -434,7 +833,10 @@ def process_jobs(executor):
         executor.submit(task_wrapper, stem, "Review", _run_review, trans, stem)
 
     # 3. REVIEWED -> FINALIZING (Finalizer)
+    review_storage_client = None
     for approved in config.TRANSLATED_DONE_DIR.glob("*_APPROVED.json"):
+        if _is_hidden_artifact(approved):
+            continue
         stem = approved.stem.replace("_APPROVED", "")
         if stem in active_tasks: continue
         if is_in_cooldown(stem): continue
@@ -453,6 +855,122 @@ def process_jobs(executor):
             if stage not in {"REVIEWED", "FINALIZING"}:
                 continue
 
+            source_path = str(meta.get("source_path") or "")
+            remote_review_required = bool(meta.get("remote_review_required")) or ("/03_remote_review/" in source_path.lower())
+            if remote_review_required and not meta.get("remote_review_done"):
+                paths, bucket_name, prefix = _cloud_job_paths(meta)
+                if not paths or not bucket_name:
+                    omega_db.update(
+                        stem,
+                        status="Blocked: Remote review missing cloud job",
+                        meta={"remote_review_error": "missing_cloud_job"},
+                    )
+                    continue
+
+                if review_storage_client is None:
+                    try:
+                        ensure_google_application_credentials()
+                        review_storage_client = storage.Client()
+                    except Exception as e:
+                        omega_db.update(
+                            stem,
+                            status=f"Blocked: Remote review auth failed ({e})",
+                            meta={"remote_review_error": str(e)},
+                        )
+                        continue
+
+                portal_url = _review_portal_url()
+                recipients = _reviewer_emails(meta)
+                if not portal_url or not recipients:
+                    omega_db.update(
+                        stem,
+                        status="Blocked: Remote review not configured",
+                        meta={
+                            "remote_review_error": "missing_portal_or_email",
+                            "remote_review_portal": portal_url,
+                        },
+                    )
+                    continue
+
+                requested = bool(meta.get("remote_review_requested"))
+                last_attempt = float(meta.get("remote_review_last_attempt") or 0.0)
+                now = time.time()
+                if not requested and (now - last_attempt) >= 300:
+                    review_payload = _build_review_payload(
+                        stem=stem,
+                        approved_path=approved,
+                        target_language=job.get("target_language", "is"),
+                        program_profile=job.get("program_profile", "standard"),
+                    )
+                    token = secrets.token_urlsafe(32)
+                    expires_at = (datetime.utcnow() + timedelta(days=7)).isoformat() + "Z"
+                    try:
+                        upload_json(review_storage_client, bucket=bucket_name, blob_name=paths.review_json(), payload=review_payload)
+                        upload_json(
+                            review_storage_client,
+                            bucket=bucket_name,
+                            blob_name=paths.review_token_json(),
+                            payload={"token": token, "expires_at": expires_at},
+                        )
+                        review_url = f"{portal_url.rstrip('/')}/review/{paths.job_id}?token={token}"
+                        email_sent = _send_review_email(stem=stem, review_url=review_url, recipients=recipients)
+                        omega_db.update(
+                            stem,
+                            status="Waiting for Remote Review",
+                            progress=70.0,
+                            meta={
+                                "remote_review_requested": bool(email_sent),
+                                "remote_review_sent_at": datetime.utcnow().isoformat() + "Z" if email_sent else None,
+                                "remote_review_last_attempt": now,
+                                "remote_review_url": review_url,
+                                "remote_review_expires_at": expires_at,
+                            },
+                        )
+                    except Exception as e:
+                        omega_db.update(
+                            stem,
+                            status=f"Remote review send failed: {e}",
+                            meta={
+                                "remote_review_last_attempt": now,
+                                "remote_review_error": str(e),
+                            },
+                        )
+                    continue
+
+                if blob_exists(review_storage_client, bucket_name, paths.review_corrections_json()):
+                    try:
+                        corrections_payload = download_json(
+                            review_storage_client,
+                            bucket=bucket_name,
+                            blob_name=paths.review_corrections_json(),
+                        )
+                        corrections = corrections_payload.get("corrections") if isinstance(corrections_payload, dict) else []
+                        applied, comment_count = _apply_remote_corrections(
+                            approved_path=approved,
+                            corrections=corrections or [],
+                        )
+                        omega_db.update(
+                            stem,
+                            status="Remote Review Applied",
+                            progress=70.0,
+                            meta={
+                                "remote_review_done": True,
+                                "remote_review_applied": applied,
+                                "remote_review_comment_count": comment_count,
+                                "remote_review_received_at": datetime.utcnow().isoformat() + "Z",
+                            },
+                        )
+                    except Exception as e:
+                        omega_db.update(
+                            stem,
+                            status=f"Remote review apply failed: {e}",
+                            meta={"remote_review_error": str(e)},
+                        )
+                    continue
+
+                omega_db.update(stem, status="Waiting for Remote Review", progress=70.0)
+                continue
+
         if (config.SRT_DIR / f"{stem}.srt").exists(): continue
         if (config.VIDEO_DIR / f"{stem}_SUBBED.mp4").exists(): continue
             
@@ -462,6 +980,8 @@ def process_jobs(executor):
     # 4. FINALIZED -> BURNING (Publisher)
     # 4. FINALIZED -> BURNING (Publisher)
     for srt in config.SRT_DIR.glob("*.srt"):
+        if _is_hidden_artifact(srt):
+            continue
         if srt.name.startswith("DONE_"): continue
         stem = srt.stem
         if stem in active_tasks:
@@ -484,7 +1004,13 @@ def process_jobs(executor):
             # Auto-Correction: If video exists but DB says otherwise, mark as DONE.
             if job and job.get("stage") != "COMPLETED":
                 logger.info(f"✅ Auto-Correcting Status for {stem} (Video Exists)")
-                omega_db.update(stem, stage="COMPLETED", status="Done", progress=100.0, meta={"final_output": str(legacy_output)})
+                omega_db.update(
+                    stem,
+                    stage="COMPLETED",
+                    status="Done",
+                    progress=100.0,
+                    meta={"final_output": str(legacy_output), "last_error": "", "failed_at": ""},
+                )
             # Stop re-triggering from stale SRTs.
             done_srt = srt.parent / f"DONE_{srt.name}"
             try:
@@ -508,12 +1034,19 @@ def process_jobs(executor):
         if stage not in {"FINALIZED", "BURNING"}:
             continue
 
-        mode = meta.get("mode", "AUTO")
         status = job.get("status", "")
-        
-        if mode == "REVIEW" and status != "Approved for Burn":
+        source_path = str(meta.get("source_path") or "")
+        review_required = bool(meta.get("review_required")) or ("/02_human_review/" in source_path.lower())
+        burn_approved = bool(meta.get("burn_approved")) or (status == "Approved for Burn")
+
+        if review_required and not burn_approved:
             if status != "Waiting for Burn Approval":
-                omega_db.update(stem, status="Waiting for Burn Approval", progress=90.0)
+                omega_db.update(
+                    stem,
+                    status="Waiting for Burn Approval",
+                    progress=90.0,
+                    meta={"review_required": review_required},
+                )
                 logger.info(f"🛑 Pre-Burn Gate: Stopping {stem} (Waiting for Approval)")
             continue
 
@@ -562,7 +1095,10 @@ def _run_translate_cloud(skel, stem, target_language):
         skeleton_payload = json.load(f)
 
     job = omega_db.get_job(stem) or {}
+    meta = job.get("meta") if isinstance(job.get("meta"), dict) else {}
     program_profile = (job.get("program_profile") or "standard").strip() or "standard"
+    polish_pass = _polish_pass_enabled(meta)
+    music_detect = _is_truthy(getattr(config, "OMEGA_CLOUD_MUSIC_DETECT", True))
 
     job_payload = {
         "project_id": "sermon-translator-system",
@@ -571,6 +1107,10 @@ def _run_translate_cloud(skel, stem, target_language):
         "program_profile": program_profile,
         "translator_model": config.MODEL_TRANSLATOR,
         "editor_model": config.MODEL_EDITOR,
+        "polish_model": config.MODEL_POLISH,
+        "music_detect": music_detect,
+        "review_required": bool(meta.get("review_required")),
+        "polish_pass": polish_pass,
         "created_at": datetime.now().isoformat(),
     }
 
@@ -697,7 +1237,18 @@ def _run_burn(srt, stem):
          pass
 
     output_video = publisher.publish(video_path, srt, subtitle_style=subtitle_style)
-    omega_db.update(stem, stage="COMPLETED", status="Done", progress=100.0, meta={"final_output": str(output_video), "burn_end_time": datetime.now().isoformat()})
+    omega_db.update(
+        stem,
+        stage="COMPLETED",
+        status="Done",
+        progress=100.0,
+        meta={
+            "final_output": str(output_video),
+            "burn_end_time": datetime.now().isoformat(),
+            "last_error": "",
+            "failed_at": "",
+        },
+    )
     logger.info(f"✅ Job Complete: {output_video.name}")
     
     done_srt = srt.parent / f"DONE_{srt.name}"
@@ -714,6 +1265,17 @@ def main():
     signal.signal(signal.SIGINT, cleanup)
     
     logger.info("🚀 Omega Manager Started (Async Mode)")
+    if _cloud_pipeline_enabled():
+        logger.info(
+            "☁️ Cloud pipeline enabled (bucket=%s, prefix=%s, job=%s, region=%s, project=%s)",
+            config.OMEGA_JOBS_BUCKET,
+            config.OMEGA_JOBS_PREFIX,
+            config.OMEGA_CLOUD_RUN_JOB or "unset",
+            config.OMEGA_CLOUD_RUN_REGION,
+            config.OMEGA_CLOUD_PROJECT or "default",
+        )
+    else:
+        logger.info("🧩 Cloud pipeline disabled (set OMEGA_CLOUD_PIPELINE=1 to enable).")
     
     # Initialize ThreadPool
     # 4 workers allows for: 1 Ingest + 1 Transcribe + 1 Translate + 1 Burn simultaneously
@@ -722,17 +1284,21 @@ def main():
             try:
                 system_health.update_heartbeat("omega_manager")
 
-                restart_flag = config.BASE_DIR / "heartbeats" / "omega_manager.restart"
-                if restart_flag.exists():
-                    if active_tasks:
+                if RESTART_FLAG.exists():
+                    force = RESTART_FORCE_FLAG.exists()
+                    if active_tasks and not force:
                         logger.warning(f"🔄 Restart requested; waiting for {len(active_tasks)} active tasks to finish...")
                         time.sleep(2)
                         continue
                     try:
-                        restart_flag.unlink()
+                        RESTART_FLAG.unlink()
                     except Exception:
                         pass
-                    logger.warning("🔄 Restarting Omega Manager now...")
+                    try:
+                        RESTART_FORCE_FLAG.unlink()
+                    except Exception:
+                        pass
+                    logger.warning("🔄 Restarting Omega Manager now%s...", " (forced)" if force else "")
                     os.execv(sys.executable, [sys.executable, str(Path(__file__).resolve())])
 
                 if not config.critical_paths_ready(require_write=True):

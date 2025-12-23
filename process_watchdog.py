@@ -3,20 +3,18 @@ import os
 import subprocess
 from pathlib import Path
 import datetime
+from lock_manager import ProcessLock
 
 # --- CONFIGURATION ---
 HEARTBEAT_DIR = Path("heartbeats")
-MAX_SILENCE_SECONDS = 300  # 5 minutes (Increased for M1 chunking)
+MAX_SILENCE_SECONDS = 300  # 5 minutes
 LOG_FILE = Path("logs/watchdog.log")
 
 # Process Name -> Restart Command
+PYTHON_BIN = os.environ.get("OMEGA_PYTHON", "python3")
 PROCESS_MAP = {
-    "auto_skeleton": ["./venv/bin/python3", "-u", "auto_skeleton.py"],
-    "omega_manager": ["./venv/bin/python3", "-u", "omega_manager.py"], # The Boss
-    "cloud_brain":   ["./venv/bin/python3", "-u", "cloud_brain.py"],
-    "finalize":      ["./venv/bin/python3", "-u", "finalize.py"],
-    "publisher":     ["./venv/bin/python3", "-u", "publisher.py"],
-
+    "omega_manager": [PYTHON_BIN, "-u", "omega_manager.py"],
+    "dashboard": [PYTHON_BIN, "-u", "dashboard.py"],
 }
 
 def log(msg):
@@ -36,16 +34,12 @@ def restart_process(name, command):
     time.sleep(1)
     
     # 2. Restart
-    log_file = Path(f"logs/{name.split('_')[-1] if '_' in name else 'hand'}.log") # ear.log, brain.log, hand.log, publisher.log
-    
-    # Map name to log file correctly
-    if name == "auto_skeleton": log_name = "logs/ear.log"
-    elif name == "omega_manager": log_name = "logs/manager.log"
-    elif name == "cloud_brain": log_name = "logs/brain.log"
-    elif name == "finalize":    log_name = "logs/hand.log"
-    elif name == "publisher":   log_name = "logs/publisher.log"
-    elif name == "editor":      log_name = "logs/editor.log"
-    else: log_name = "logs/unknown.log"
+    if name == "omega_manager":
+        log_name = "logs/manager.log"
+    elif name == "dashboard":
+        log_name = "logs/dashboard.log"
+    else:
+        log_name = "logs/unknown.log"
 
     with open(log_name, "a") as out:
         subprocess.Popen(command, stdout=out, stderr=out)
@@ -85,4 +79,5 @@ def monitor():
         time.sleep(10)
 
 if __name__ == "__main__":
-    monitor()
+    with ProcessLock("omega_watchdog"):
+        monitor()

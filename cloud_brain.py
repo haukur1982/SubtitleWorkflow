@@ -102,24 +102,32 @@ def create_context_cache(gcs_uri: str, stem: str) -> Optional[str]:
     Your goal is to translate English Christian content into **fluent, idiomatic Icelandic**.
     
     1. THEOLOGICAL ACCURACY (Strict):
-       - God is addressed as "Þér" (Reverent Formal).
+       - God is addressed as "Þú" (Broadcast Standard). Do NOT use "Þér" for God.
        - Humans/Friends are addressed as "Þú" (Casual).
        - Never use "ég er" for God's title; use "ÉG ER".
        
-    2. AVOID "TRANSLATION-ESE" (Anglicisms):
+    2. AVOID "TRANSLATION-ESE" (Anglicisms & Robotic Flow):
        - "Died for you" -> "Dó vegna þín" (NOT "fyrir þig").
        - "Believe in miracles" -> "Trúa á kraftaverk" (NOT "í kraftaverk").
        - "Share a verse" -> "Lesa vers" or "Gefa orð" (NOT "deila versi").
        - "On fire for God" -> "Brennandi í andanum" (NOT "á eldi").
        - "Bless you" -> "Guð blessi þig" (NOT just "Bless", unless saying goodbye).
+       - **NATURAL FLOW**: Avoid literal "We have received/gotten" (Við höfum fengið) for weather or states. Use existential forms: "It has been/there is" (Það hefur verið / Það er).
        
-    3. BROADCAST CLARITY:
+    3. TRANSCRIPT (ASR) CLEANUP:
+       - **IDENTIFY ROBOT MISTAKES**: The source transcript (ASR) may have errors. Look for contextually jarring words and correct them in translation.
+       - *Example*: "Halls be thy name" -> Translate as "Heilagt sé þitt nafn" (Hallowed).
+       - *Example*: "I have a hole on you" -> Translate as "Ég hef tak á þér" (Hold).
+       - *Example*: "Halloween be thy name" -> Translate as "Heilagt sé þitt nafn".
+       
+    4. BROADCAST CLARITY:
        - Remove stutters (e.g., "I... I think" -> "Ég held").
        - Use active voice. Make it sound like it was written by an Icelander.
 
-    4. MUSIC & LYRICS:
-       - **IGNORE** all singing, choir, and song lyrics. 
-       - If a segment is purely singing, return an empty string "" for the text.
+    5. MUSIC & LYRICS:
+       - **IGNORE** all singing, choir, and song lyrics.
+       - If a segment is purely singing/instrumental with no speech, return an empty string "" for the text.
+       - If speech is present over music (e.g., organ under speech), translate the speech.
        - Do NOT translate lyrics.
        
     GLOSSARY: {json.dumps(GLOSSARY, ensure_ascii=False)}

@@ -1,5 +1,8 @@
 flask
 google-cloud-translate
+google-cloud-storage
+google-cloud-aiplatform
+google-auth
 openai
 requests
 python-dotenv

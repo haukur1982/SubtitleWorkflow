@@ -32,6 +32,7 @@
         .panel {
             background-color: var(--bg-panel);
             border-right: 1px solid var(--border);
+            min-height: 0;
         }
 
         .grid-layout {
@@ -66,6 +67,10 @@
         select,
         button {
             transition: all 0.2s ease;
+        }
+
+        #inspector-content {
+            min-height: 0;
         }
     </style>
 </head>
@@ -256,6 +261,27 @@
                     </div>
                 </div>
 
+                <!-- Monitoring -->
+                <div id="monitoring-section" class="mb-8 bg-[#1a1a1a] border border-[#333] rounded-lg p-4">
+                    <div class="flex items-center justify-between mb-3">
+                        <span class="text-[10px] font-bold text-[#666] uppercase tracking-wider">Monitoring</span>
+                        <span id="monitor-total" class="text-[10px] text-[#666] font-mono">--</span>
+                    </div>
+                    <div class="mb-3">
+                        <div class="text-[10px] font-bold text-[#555] uppercase tracking-wider mb-2">Pipeline Timeline</div>
+                        <div id="monitor-stage-list" class="space-y-1 text-xs text-[#aaa] font-mono"></div>
+                    </div>
+                    <div class="mb-3">
+                        <div class="text-[10px] font-bold text-[#555] uppercase tracking-wider mb-2">Cloud Timeline</div>
+                        <div id="monitor-cloud-summary" class="text-[10px] text-[#666] mb-2">--</div>
+                        <div id="monitor-cloud-list" class="space-y-1 text-xs text-[#aaa] font-mono"></div>
+                    </div>
+                    <div>
+                        <div class="text-[10px] font-bold text-[#555] uppercase tracking-wider mb-2">Recent Status</div>
+                        <div id="monitor-status-list" class="space-y-1 text-xs text-[#888] font-mono"></div>
+                    </div>
+                </div>
+
                 <!-- Settings Form -->
                 <div class="space-y-6">
                     <div class="group">
@@ -268,6 +294,10 @@
                                 <option value="is">Icelandic</option>
                                 <option value="en">English</option>
                                 <option value="es">Spanish</option>
+                                <option value="pt">Portuguese</option>
+                                <option value="fr">French</option>
+                                <option value="de">German</option>
+                                <option value="it">Italian</option>
                             </select>
                             <div class="absolute right-3 top-3 pointer-events-none text-[#666]">▼</div>
                         </div>
@@ -365,6 +395,26 @@
                                     class="text-[10px] font-bold text-[#666] uppercase tracking-wider block mb-1">Examples</span>
                                 <ul id="qa-caps-samples" class="list-disc list-inside text-xs text-[#aaa]"></ul>
                             </div>
+                        </div>
+
+                        <!-- Subtitle QA -->
+                        <div id="subtitle-qa" class="hidden mb-6 bg-[#1a1a1a] border border-[#333] rounded-lg p-4">
+                            <div class="flex items-center justify-between mb-3">
+                                <span class="text-[10px] font-bold text-[#666] uppercase tracking-wider">Subtitle
+                                    QA</span>
+                                <div id="qa-srt-badge"
+                                    class="px-2 py-1 rounded bg-emerald-500/20 text-emerald-300 text-xs font-bold">--
+                                </div>
+                            </div>
+                            <div class="grid grid-cols-2 gap-2 text-xs text-[#888] mb-2">
+                                <div>High CPS (&gt;17): <span id="qa-srt-cps17">0</span></div>
+                                <div>Very High CPS (&gt;20): <span id="qa-srt-cps20">0</span></div>
+                                <div>Short (&lt;1.0s): <span id="qa-srt-short">0</span></div>
+                                <div>Long (&gt;7.0s): <span id="qa-srt-long">0</span></div>
+                                <div>Long Lines (&gt;42): <span id="qa-srt-longlines">0</span></div>
+                                <div>Dangling Endings: <span id="qa-srt-dangling">0</span></div>
+                            </div>
+                            <p id="qa-srt-note" class="text-[10px] text-[#666]">--</p>
                         </div>
 
                         <!-- Output -->
@@ -793,6 +843,113 @@
                     updateInspector();
                 }
 
+                function formatDuration(seconds) {
+                    if (seconds === null || seconds === undefined || isNaN(seconds)) return "--";
+                    const total = Math.max(0, Math.floor(seconds));
+                    const h = Math.floor(total / 3600);
+                    const m = Math.floor((total % 3600) / 60);
+                    const s = total % 60;
+                    if (h > 0) return `${h}h ${m}m ${s}s`;
+                    if (m > 0) return `${m}m ${s}s`;
+                    return `${s}s`;
+                }
+
+                function formatTime(iso) {
+                    if (!iso) return "--";
+                    const d = new Date(iso);
+                    if (isNaN(d.getTime())) return "--";
+                    return d.toLocaleTimeString();
+                }
+
+                function parseIso(iso) {
+                    if (!iso) return null;
+                    const d = new Date(iso);
+                    if (isNaN(d.getTime())) return null;
+                    return d;
+                }
+
+                function renderTimeline(entries, containerId, emptyText) {
+                    const container = document.getElementById(containerId);
+                    if (!container) return;
+                    if (!Array.isArray(entries) || entries.length === 0) {
+                        container.innerHTML = `<div class="text-xs text-[#555]">${emptyText}</div>`;
+                        return;
+                    }
+                    const now = new Date();
+                    container.innerHTML = entries.map(entry => {
+                    const stage = (entry.stage || "UNKNOWN").toString().replace(/^CLOUD_/, "");
+                        const started = parseIso(entry.started_at);
+                        const ended = parseIso(entry.ended_at);
+                        const duration = started ? ((ended || now) - started) / 1000 : null;
+                        const running = !ended;
+                        const label = running ? "▶" : "•";
+                        const rowClass = running ? "text-white" : "text-[#aaa]";
+                        return `
+                            <div class="flex items-center justify-between gap-2 ${rowClass}">
+                                <span>${label} ${stage}</span>
+                                <span class="text-[#666]">${formatDuration(duration)}</span>
+                            </div>
+                        `;
+                    }).join('');
+                }
+
+                function renderStatusTimeline(entries, containerId, maxItems = 6) {
+                    const container = document.getElementById(containerId);
+                    if (!container) return;
+                    if (!Array.isArray(entries) || entries.length === 0) {
+                        container.innerHTML = `<div class="text-xs text-[#555]">No status history yet.</div>`;
+                        return;
+                    }
+                    const slice = entries.slice(-maxItems).reverse();
+                    container.innerHTML = slice.map(entry => {
+                        const status = (entry.status || "").toString();
+                        const time = formatTime(entry.at);
+                        return `
+                            <div class="flex items-center justify-between gap-2">
+                                <span class="text-[#888] truncate">${status}</span>
+                                <span class="text-[#555]">${time}</span>
+                            </div>
+                        `;
+                    }).join('');
+                }
+
+                function updateMonitoring(job, meta) {
+                    const stageTimeline = Array.isArray(meta?.stage_timeline) ? meta.stage_timeline : [];
+                    const cloudTimeline = Array.isArray(meta?.cloud_stage_timeline) ? meta.cloud_stage_timeline : [];
+                    const statusTimeline = Array.isArray(meta?.status_timeline) ? meta.status_timeline : [];
+                    const cloudProgress = meta?.cloud_progress || null;
+
+                    renderTimeline(stageTimeline, "monitor-stage-list", "No pipeline data yet.");
+                    renderTimeline(cloudTimeline, "monitor-cloud-list", "No cloud activity yet.");
+                    renderStatusTimeline(statusTimeline, "monitor-status-list");
+
+                    const cloudSummaryEl = document.getElementById("monitor-cloud-summary");
+                    if (cloudSummaryEl) {
+                        if (cloudProgress && (cloudProgress.status || cloudProgress.progress !== null)) {
+                            const prog = cloudProgress.progress !== null && cloudProgress.progress !== undefined
+                                ? `${Math.round(cloudProgress.progress)}%`
+                                : "--";
+                            const status = cloudProgress.status || "Cloud running";
+                            const updated = formatTime(cloudProgress.updated_at);
+                            cloudSummaryEl.innerText = `${status} • ${prog} • Updated ${updated}`;
+                        } else {
+                            cloudSummaryEl.innerText = "No cloud progress yet.";
+                        }
+                    }
+
+                    const totalEl = document.getElementById("monitor-total");
+                    if (totalEl) {
+                        let total = null;
+                        if (stageTimeline.length > 0) {
+                            const first = parseIso(stageTimeline[0]?.started_at);
+                            const last = parseIso(stageTimeline[stageTimeline.length - 1]?.ended_at) || new Date();
+                            if (first) total = (last - first) / 1000;
+                        }
+                        const updated = formatTime(job.updated_at);
+                        totalEl.innerText = `${formatDuration(total)} • Updated ${updated}`;
+                    }
+                }
+
                 function updateInspector() {
                     const job = jobsData.find(j => j.file_stem === selectedJobId);
                     if (!job) return;
@@ -966,6 +1123,48 @@
                     } else {
                         qaDiv.classList.add('hidden');
                     }
+
+                    // Subtitle QA
+                    const srtQaDiv = document.getElementById('subtitle-qa');
+                    const qaSrt = meta?.qa_srt || null;
+                    if (qaSrt) {
+                        srtQaDiv.classList.remove('hidden');
+
+                        const cps17 = qaSrt?.high_cps_17 || 0;
+                        const cps20 = qaSrt?.high_cps_20 || 0;
+                        const shortDur = qaSrt?.short_duration || 0;
+                        const longDur = qaSrt?.long_duration || 0;
+                        const longLines = qaSrt?.long_lines || 0;
+                        const dangling = qaSrt?.dangling || 0;
+                        const totalBlocks = qaSrt?.total || 0;
+
+                        document.getElementById('qa-srt-cps17').innerText = cps17;
+                        document.getElementById('qa-srt-cps20').innerText = cps20;
+                        document.getElementById('qa-srt-short').innerText = shortDur;
+                        document.getElementById('qa-srt-long').innerText = longDur;
+                        document.getElementById('qa-srt-longlines').innerText = longLines;
+                        document.getElementById('qa-srt-dangling').innerText = dangling;
+
+                        const issueCount = cps20 + longDur + shortDur + longLines + dangling;
+                        const badge = document.getElementById('qa-srt-badge');
+                        badge.innerText = totalBlocks ? `${issueCount}/${totalBlocks}` : `${issueCount}`;
+                        if (cps20 > 0 || longDur > 0) {
+                            badge.className = "px-2 py-1 rounded bg-red-500/20 text-red-300 text-xs font-bold";
+                        } else if (issueCount > 0) {
+                            badge.className = "px-2 py-1 rounded bg-yellow-500/20 text-yellow-300 text-xs font-bold";
+                        } else {
+                            badge.className = "px-2 py-1 rounded bg-emerald-500/20 text-emerald-300 text-xs font-bold";
+                        }
+
+                        const maxCps = qaSrt?.max_cps || 0;
+                        const maxDur = qaSrt?.max_duration || 0;
+                        document.getElementById('qa-srt-note').innerText = `Max CPS: ${maxCps} | Max duration: ${maxDur}s`;
+                    } else {
+                        srtQaDiv.classList.add('hidden');
+                    }
+
+                    // Monitoring
+                    updateMonitoring(job, meta);
                 }
 
                 function updateStep(id, isComplete, isActive) {

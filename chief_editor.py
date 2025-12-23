@@ -78,7 +78,7 @@ def run_editor_pass(json_file: Path):
         You are looking for "Robot Mistakes," theological errors, and awkward phrasing.
         
         STRICT RULES:
-        1. "Þú" vs "Þér": Ensure God is addressed as "Þér" and humans as "Þú".
+        1. "Þú" vs "Þér": God is addressed as "Þú" (do NOT use "Þér").
         2. NO ANGLICISMS: 
            - Reject "fyrir þig" (used for "died for you"). Use "vegna þín".
            - Reject "á eldi" (on fire). Use "brennandi".
@@ -87,6 +87,12 @@ def run_editor_pass(json_file: Path):
            - "Partners" -> "Bakhjarlar".
            - "I AM" -> "ÉG ER".
            - "Covenant" -> "Sáttmáli".
+           - "Pastor" -> "Prestur".
+        4. ASR CLEANUP:
+           - Fix obvious speech-to-text errors in the SOURCE when the intended word is clear.
+           - If uncertain, leave the original wording.
+        5. MUSIC VS SPEECH:
+           - If the SOURCE contains spoken content (not a pure music marker), the translation must NOT be "(MUSIC)" or blank.
            
         INPUT DATA:
         --- SOURCE (English) ---

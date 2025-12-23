@@ -15,6 +15,10 @@ MAX_LINES = 2
 MIN_DURATION = 1.0      # Minimum 1 second on screen
 IDEAL_CPS = 17          # Characters per second (Netflix standard)
 GAP_SECONDS = 0.1       # Gap between subtitles
+MERGE_GAP_MAX = 0.35
+MERGE_MAX_DURATION = 6.8
+MERGE_CPS_TRIGGER = 20.0
+MERGE_SHORT_TRIGGER = 0.9
 
 def _caps_upper_ratio(text: str) -> tuple[float, int]:
     letters = [ch for ch in text if ch.isalpha()]
@@ -64,6 +68,73 @@ def _collect_caps_warnings(events: list[dict]) -> dict:
         "samples": samples,
     }
 
+
+def _collect_srt_qc(events: list[dict]) -> dict:
+    orphans = {"og", "en", "að", "því", "er", "sem", "var"}
+    total = len(events)
+    high_cps_17 = 0
+    high_cps_20 = 0
+    short_duration = 0
+    long_duration = 0
+    long_lines = 0
+    dangling = 0
+    max_cps = 0.0
+    max_duration = 0.0
+
+    for event in events:
+        lines = event.get("lines") or []
+        cleaned_lines = [str(line).strip() for line in lines if str(line).strip()]
+        if not cleaned_lines:
+            continue
+
+        text = " ".join(cleaned_lines).strip()
+        duration = max(0.0, float(event.get("end", 0.0)) - float(event.get("start", 0.0)))
+        cps = (len(text) / duration) if duration > 0 else 0.0
+        max_cps = max(max_cps, cps)
+        max_duration = max(max_duration, duration)
+
+        if cps > IDEAL_CPS:
+            high_cps_17 += 1
+        if cps > 20:
+            high_cps_20 += 1
+        if duration < MIN_DURATION:
+            short_duration += 1
+        if duration > 7.0:
+            long_duration += 1
+
+        for line in cleaned_lines:
+            if len(line) > MAX_CHARS_PER_LINE:
+                long_lines += 1
+
+        last_word = cleaned_lines[-1].split()[-1].lower().strip(".,:;?!\"'")
+        if last_word in orphans:
+            dangling += 1
+
+    return {
+        "total": total,
+        "high_cps_17": high_cps_17,
+        "high_cps_20": high_cps_20,
+        "short_duration": short_duration,
+        "long_duration": long_duration,
+        "long_lines": long_lines,
+        "dangling": dangling,
+        "max_cps": round(max_cps, 2),
+        "max_duration": round(max_duration, 2),
+    }
+
+def _is_music_only(text: str) -> bool:
+    if not text:
+        return True
+    cleaned = text.strip()
+    cleaned = cleaned.replace("♪", "").strip()
+    stripped = cleaned.strip("[]()").strip()
+    if not stripped:
+        return "♪" in text
+    tokens = [t for t in stripped.split() if t]
+    if len(tokens) != 1:
+        return False
+    return tokens[0].lower() in {"music", "song", "singing", "choir", "instrumental"}
+
 def format_timestamp(seconds):
     hours = int(seconds // 3600)
     minutes = int((seconds % 3600) // 60)
@@ -74,10 +145,16 @@ def format_timestamp(seconds):
 def split_into_balanced_lines(text, target_language="is"):
     if len(text) <= MAX_CHARS_PER_LINE:
         return [text]
-    
+
     # If text is extremely long (>84), we might need 3 lines, but let's stick to 2 for now and force split
     middle = len(text) // 2
     candidates = []
+
+    bad_starters = set()
+    if target_language == "is":
+        bad_starters = {"og", "en", "sem", "að", "eða", "því"}
+    elif target_language in ["es", "spanish"]:
+        bad_starters = {"y", "o", "que", "pero", "de", "en"}
     
     # Search window: Try to stay within 42 chars for the first line
     # Ideally split around the middle, but MUST NOT exceed MAX_CHARS_PER_LINE for the first line
@@ -93,24 +170,21 @@ def split_into_balanced_lines(text, target_language="is"):
             
             # Semantic Bonus
             if i > 0 and text[i-1] in ',.;:?!': score += 20
-            remaining = text[i:]
-            # Semantic Bonus (Language Aware)
-            # Icelandic Conjunctions
-            if target_language == "is":
-                if remaining.startswith(' og ') or remaining.startswith(' en ') or \
-                   remaining.startswith(' sem ') or remaining.startswith(' að ') or \
-                   remaining.startswith(' eða ') or remaining.startswith(' því '):
-                    score += 15
-            # Spanish Conjunctions
-            elif target_language in ["es", "spanish"]:
-                if remaining.startswith(' y ') or remaining.startswith(' o ') or \
-                   remaining.startswith(' que ') or remaining.startswith(' pero ') or \
-                   remaining.startswith(' de ') or remaining.startswith(' en '):
-                    score += 15
-                
+            left = text[:i].strip()
+            right = text[i:].strip()
+            remaining = text[i + 1 :].lstrip()
+            next_word = remaining.split(" ", 1)[0].lower().strip(".,:;?!\"'")
+            if next_word in bad_starters:
+                score -= 20
+
+            imbalance = abs(len(left) - len(right))
+            score -= min(imbalance, 40) * 0.6
+            if len(left) < 12 or len(right) < 12:
+                score -= 15
+            
             # Penalty for exceeding max length
-            if i > MAX_CHARS_PER_LINE: score -= 50
-            if (len(text) - i) > MAX_CHARS_PER_LINE: score -= 50
+            if len(left) > MAX_CHARS_PER_LINE or len(right) > MAX_CHARS_PER_LINE:
+                continue
             
             candidates.append((i, score))
             
@@ -194,6 +268,59 @@ def abbreviate_bible_refs(text, target_language="is"):
     
     return text
 
+def _merge_high_cps_events(events: list[dict]) -> list[dict]:
+    if not events:
+        return events
+
+    merged: list[dict] = []
+    i = 0
+    max_chars = MAX_CHARS_PER_LINE * MAX_LINES
+    while i < len(events):
+        curr = events[i]
+        if i < len(events) - 1:
+            nxt = events[i + 1]
+            try:
+                gap = float(nxt["start"]) - float(curr["end"])
+            except Exception:
+                gap = MERGE_GAP_MAX + 1
+
+            if gap <= MERGE_GAP_MAX and gap >= -0.05:
+                curr_text = str(curr.get("text") or "").strip()
+                next_text = str(nxt.get("text") or "").strip()
+                if curr_text and next_text:
+                    curr_dur = max(0.01, float(curr["end"]) - float(curr["start"]))
+                    next_dur = max(0.01, float(nxt["end"]) - float(nxt["start"]))
+                    curr_cps = len(curr_text) / curr_dur
+                    next_cps = len(next_text) / next_dur
+
+                    combined_text = f"{curr_text} {next_text}".strip()
+                    combined_dur = max(0.01, float(nxt["end"]) - float(curr["start"]))
+                    combined_cps = len(combined_text) / combined_dur
+
+                    needs_merge = (
+                        curr_cps > MERGE_CPS_TRIGGER
+                        or next_cps > MERGE_CPS_TRIGGER
+                        or curr_dur < MERGE_SHORT_TRIGGER
+                        or next_dur < MERGE_SHORT_TRIGGER
+                    )
+
+                    if (
+                        needs_merge
+                        and combined_dur <= MERGE_MAX_DURATION
+                        and len(combined_text) <= max_chars
+                        and (combined_cps <= MERGE_CPS_TRIGGER or combined_cps <= max(curr_cps, next_cps) - 0.5)
+                    ):
+                        merged.append(
+                            {"start": curr["start"], "end": nxt["end"], "text": combined_text}
+                        )
+                        i += 2
+                        continue
+
+        merged.append(curr)
+        i += 1
+
+    return merged
+
 def finalize(approved_path: Path, target_language: str = "is"):
     """
     Converts APPROVED JSON -> SRT.
@@ -223,8 +350,11 @@ def finalize(approved_path: Path, target_language: str = "is"):
         end = item['end']
         text = item['text'].replace("\n", " ").strip()
         text = abbreviate_bible_refs(text, target_language)
-        
-        if not text or "(MUSIC)" in text or "(SONG)" in text: continue 
+
+        if not text:
+            continue
+        if _is_music_only(text):
+            continue
             
         queue = [{'start': start, 'end': end, 'text': text}]
 
@@ -255,16 +385,24 @@ def finalize(approved_path: Path, target_language: str = "is"):
             else:
                 processed_events.append(curr)
 
-    # PASS 1.5: ORPHAN RESCUER (BBC/Netflix Standard)
+    # PASS 1.5: CPS RESCUE MERGE
+    for _ in range(2):
+        merged_events = _merge_high_cps_events(processed_events)
+        if len(merged_events) == len(processed_events):
+            break
+        processed_events = merged_events
+
+    # PASS 1.6: ORPHAN RESCUER (BBC/Netflix Standard)
     # Move dangling words (og, en, að, því, er) to the next block
     orphans = {"og", "en", "að", "því", "er", "sem", "var"}
     for i in range(len(processed_events) - 1):
         curr = processed_events[i]
         next_item = processed_events[i+1]
-        
+
         words = curr['text'].split()
-        if not words: continue
-        
+        if not words:
+            continue
+
         last_word = words[-1].lower().strip(".,:;?!\"")
         if last_word in orphans:
             # Move the word to the next block
@@ -354,5 +492,11 @@ def finalize(approved_path: Path, target_language: str = "is"):
         omega_db.update(stem, meta={"qa_caps": caps_qa})
     except Exception as e:
         logger.warning("   ⚠️ QA Caps check failed: %s", e)
+
+    try:
+        qa_srt = _collect_srt_qc(normalized_events)
+        omega_db.update(stem, meta={"qa_srt": qa_srt})
+    except Exception as e:
+        logger.warning("   ⚠️ SRT QA summary failed: %s", e)
 
     return srt_path, normalized_path

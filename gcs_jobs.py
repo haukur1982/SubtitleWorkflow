@@ -54,6 +54,15 @@ class GcsJobPaths:
     def approved_json(self) -> str:
         return f"{self._base()}/approved.json"
 
+    def review_json(self) -> str:
+        return f"{self._base()}/review.json"
+
+    def review_token_json(self) -> str:
+        return f"{self._base()}/review_token.json"
+
+    def review_corrections_json(self) -> str:
+        return f"{self._base()}/review_corrections.json"
+
     def progress_json(self) -> str:
         return f"{self._base()}/progress.json"
 
@@ -109,4 +118,3 @@ def utc_iso_now() -> str:
 def backoff_sleep(attempt: int, *, base_seconds: float = 1.7, cap_seconds: float = 45.0) -> None:
     delay = min(cap_seconds, base_seconds ** max(1, attempt))
     time.sleep(delay)
-

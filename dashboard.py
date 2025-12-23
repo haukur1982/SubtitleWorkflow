@@ -38,6 +38,20 @@ def _dashboard_heartbeat():
     except Exception:
         pass
 
+def _heartbeat_loop():
+    while True:
+        try:
+            beat_dir = config.BASE_DIR / "heartbeats"
+            beat_dir.mkdir(exist_ok=True)
+            (beat_dir / "dashboard.beat").touch()
+        except Exception:
+            pass
+        time.sleep(10)
+
+def _start_heartbeat_thread():
+    thread = threading.Thread(target=_heartbeat_loop, name="dashboard-heartbeat", daemon=True)
+    thread.start()
+
 
 def _is_loopback(addr: Optional[str]) -> bool:
     if not addr:
@@ -147,6 +161,9 @@ def get_all_jobs():
     jobs = []
     for row in rows:
         job = dict(row)
+        stem = (job.get("file_stem") or "").strip()
+        if stem.startswith("._"):
+            continue
         try:
             job["meta"] = json.loads(job["meta"])
         except:
@@ -663,14 +680,28 @@ def api_action():
         return jsonify({"success": True, "message": f"Style set to {subtitle_style}"})
 
     elif action == "approve_burn":
-        omega_db.update(file_stem, status="Approved for Burn")
+        omega_db.update(
+            file_stem,
+            status="Approved for Burn",
+            meta={
+                "burn_approved": True,
+                "burn_approved_at": datetime.now().isoformat(),
+            },
+        )
         return jsonify({"success": True, "message": f"Approved Burn for {file_stem}"})
 
     elif action == "set_mode":
         mode = data.get('mode')
         if mode not in ["AUTO", "REVIEW"]:
              return jsonify({"error": "Invalid mode"}), 400
-        omega_db.update(file_stem, meta={"mode": mode})
+        omega_db.update(
+            file_stem,
+            meta={
+                "mode": mode,
+                "review_required": mode == "REVIEW",
+                "mode_set_at": datetime.now().isoformat(),
+            },
+        )
         return jsonify({"success": True, "message": f"Mode set to {mode}"})
 
     elif action == "delete_job":
@@ -814,6 +845,7 @@ def save_segments():
 if __name__ == '__main__':
     # Ensure DB exists
     omega_db.init_db()
+    _start_heartbeat_thread()
     # Run server (Disable reloader to prevent zombie processes)
     host = os.environ.get("OMEGA_DASH_HOST", "127.0.0.1")
     port = int(os.environ.get("OMEGA_DASH_PORT", "8080"))

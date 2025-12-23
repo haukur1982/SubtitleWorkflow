@@ -4,10 +4,27 @@ import json
 # These apply to EVERYONE speaking this language.
 
 LANGUAGES = {
+    "en": {
+        "name": "English",
+        "bible": "English Standard Version (ESV)",
+        "god_address": "Reverent second-person (You/Your) capitalized when customary",
+        "human_address": "Natural broadcast English",
+        "music_prompt": "(MUSIC)",
+        "conjunctions": ["and", "but", "that", "or", "because", "so"],
+        "abbreviations": {},
+        "base_prompt": """
+        1. THEOLOGICAL ACCURACY (Strict):
+           - Use **English Standard Version (ESV)** for scripture.
+           - Honorifics: God -> capitalized pronouns where customary.
+           
+        2. BROADCAST CLARITY:
+           - Clear, neutral English; remove filler and keep phrasing concise.
+        """
+    },
     "is": {
         "name": "Icelandic",
         "bible": "Biblían 2007",
-        "god_address": "Þér (Reverent Formal)",
+        "god_address": "Þú (Broadcast Standard)",
         "human_address": "Þú (Casual)",
         "music_prompt": "(MUSIC)",
         "conjunctions": ["og", "en", "sem", "að", "eða", "því"],
@@ -18,7 +35,8 @@ LANGUAGES = {
         },
         "base_prompt": """
         1. THEOLOGICAL ACCURACY (Strict):
-           - God is addressed as "Þér" (Reverent Formal).
+           - God is addressed as "Þú".
+           - Do NOT use "Þér" for God.
            - Humans/Friends are addressed as "Þú" (Casual).
            - Never use "ég er" for God's title; use "ÉG ER".
            
@@ -26,9 +44,15 @@ LANGUAGES = {
            - Use **Biblían 2007**.
            - If English speaker paraphrases, RECALL the official Icelandic verse.
            
-        3. AVOID ANGLICISMS:
+        3. AVOID ANGLICISMS & ROBOTIC FLOW:
            - "Died for you" -> "Dó vegna þín".
-           - "On fire" -> "Brennandi".
+           - "On fire" -> "Brennandi" (NOT "á eldi").
+           - **NATURAL FLOW**: Avoid literal "We have received/gotten" (Við höfum fengið) for weather or states. Use existential forms: "It has been/there is" (Það hefur verið / Það er).
+        
+        4. TERMINOLOGY:
+           - "Pastor" -> "Prestur".
+           - "Hallowed" -> "Heilagt" (NOT "halls", "halloween").
+           - "Hold" -> "Tak" or "Halda" (NOT "hole").
         """
     },
     "es": {
@@ -51,7 +75,75 @@ LANGUAGES = {
         2. BROADCAST CLARITY:
            - Use neutral Latin American Evangelical Standard.
         """
-    }
+    },
+    "pt": {
+        "name": "Portuguese",
+        "bible": "Almeida Revista e Atualizada (ARA)",
+        "god_address": "Reverent second-person (capitalize pronouns as customary)",
+        "human_address": "Natural broadcast second-person",
+        "music_prompt": "(MUSIC)",
+        "conjunctions": ["e", "mas", "que", "ou", "porque", "para"],
+        "abbreviations": {},
+        "base_prompt": """
+        1. THEOLOGICAL ACCURACY (Strict):
+           - Use **Almeida Revista e Atualizada (ARA)** for scripture.
+           - Honorifics: God -> reverent second-person (capitalize where customary).
+           
+        2. BROADCAST CLARITY:
+           - Use neutral, contemporary Portuguese; avoid slang.
+        """
+    },
+    "fr": {
+        "name": "French",
+        "bible": "Louis Segond 1910 (LSG)",
+        "god_address": "Reverent second-person (capitalize pronouns as customary)",
+        "human_address": "Natural broadcast second-person",
+        "music_prompt": "(MUSIC)",
+        "conjunctions": ["et", "mais", "que", "ou", "parce", "pour"],
+        "abbreviations": {},
+        "base_prompt": """
+        1. THEOLOGICAL ACCURACY (Strict):
+           - Use **Louis Segond 1910 (LSG)** for scripture.
+           - Honorifics: God -> reverent second-person (capitalize where customary).
+           
+        2. BROADCAST CLARITY:
+           - Use clear, neutral French; avoid slang.
+        """
+    },
+    "de": {
+        "name": "German",
+        "bible": "Luther 2017",
+        "god_address": "Reverent second-person (capitalize pronouns as customary)",
+        "human_address": "Natural broadcast second-person",
+        "music_prompt": "(MUSIC)",
+        "conjunctions": ["und", "aber", "dass", "oder", "weil", "für"],
+        "abbreviations": {},
+        "base_prompt": """
+        1. THEOLOGICAL ACCURACY (Strict):
+           - Use **Luther 2017** for scripture.
+           - Honorifics: God -> reverent second-person (capitalize where customary).
+           
+        2. BROADCAST CLARITY:
+           - Use clear, neutral German; avoid slang.
+        """
+    },
+    "it": {
+        "name": "Italian",
+        "bible": "Nuova Riveduta 2006",
+        "god_address": "Reverent second-person (capitalize pronouns as customary)",
+        "human_address": "Natural broadcast second-person",
+        "music_prompt": "(MUSIC)",
+        "conjunctions": ["e", "ma", "che", "o", "perché", "per"],
+        "abbreviations": {},
+        "base_prompt": """
+        1. THEOLOGICAL ACCURACY (Strict):
+           - Use **Nuova Riveduta 2006** for scripture.
+           - Honorifics: God -> reverent second-person (capitalize where customary).
+           
+        2. BROADCAST CLARITY:
+           - Use clear, neutral Italian; avoid slang.
+        """
+    },
 }
 
 # --- 2. THE SOUL (Persona/Program Profiles) ---
@@ -118,9 +210,11 @@ def get_system_instruction(lang_code="is", profile_key="standard"):
     {json.dumps(active_glossary, indent=2, ensure_ascii=False)}
     
     --- UNIVERSAL RULES ---
-    1. MUSIC: Ignore singing. Output `{lang['music_prompt']}`.
+    1. MUSIC: If a segment is purely singing/lyrics or instrumental with no speech, output `{lang['music_prompt']}`. If speech is present over music (e.g., organ under speech), translate the speech and do NOT output `{lang['music_prompt']}`.
     2. FORMAT: Return JSON array matching input IDs.
-    3. CAPITALIZATION (Broadcast): Use normal sentence case (not ALL CAPS). If the source segment is ALL CAPS, convert it to natural casing. Preserve acronyms/initialisms (e.g., USA, TV, I-690), Bible abbreviations, and mandatory theological titles (e.g., ÉG ER / YO SOY).
+    3. BREVITY (Broadcast): Prefer concise, natural phrasing; remove filler; keep sentences tight to reduce CPS.
+    4. CAPITALIZATION (Broadcast): Use normal sentence case (not ALL CAPS). If the source segment is ALL CAPS, convert it to natural casing. Preserve acronyms/initialisms (e.g., USA, TV, I-690), Bible abbreviations, and mandatory theological titles (e.g., ÉG ER / YO SOY).
+    5. ASR CLEANUP: If the source contains an obvious speech-to-text error and the intended word is clear, fix it before translating. If unsure, keep the original wording.
     """
     
     return prompt

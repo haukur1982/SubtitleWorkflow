@@ -1,0 +1,251 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>Omega Review</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      background: #0f0f0f;
+      color: #e6e6e6;
+      margin: 0;
+      padding: 24px;
+    }
+    .wrap {
+      max-width: 980px;
+      margin: 0 auto;
+    }
+    h1 {
+      margin: 0 0 6px 0;
+      font-size: 22px;
+    }
+    .meta {
+      color: #9aa0a6;
+      font-size: 13px;
+      margin-bottom: 16px;
+    }
+    .panel {
+      background: #1a1a1a;
+      border: 1px solid #2b2b2b;
+      border-radius: 10px;
+      padding: 14px;
+      margin-bottom: 14px;
+    }
+    label {
+      display: block;
+      font-size: 12px;
+      color: #9aa0a6;
+      margin-bottom: 6px;
+    }
+    input[type="text"], textarea {
+      width: 100%;
+      background: #0f0f0f;
+      color: #e6e6e6;
+      border: 1px solid #333;
+      border-radius: 6px;
+      padding: 8px;
+      box-sizing: border-box;
+    }
+    textarea {
+      min-height: 56px;
+      resize: vertical;
+    }
+    .seg {
+      margin-bottom: 12px;
+      padding: 12px;
+      border: 1px solid #2b2b2b;
+      border-radius: 8px;
+      background: #161616;
+    }
+    .seg-header {
+      font-size: 12px;
+      color: #b0b0b0;
+      margin-bottom: 8px;
+    }
+    .source {
+      font-size: 13px;
+      color: #cfd1d4;
+      margin-bottom: 8px;
+      line-height: 1.4;
+    }
+    .actions {
+      display: flex;
+      gap: 12px;
+      align-items: center;
+      margin-top: 12px;
+    }
+    button {
+      background: #2f6fed;
+      color: #fff;
+      border: none;
+      border-radius: 8px;
+      padding: 10px 14px;
+      cursor: pointer;
+      font-weight: bold;
+    }
+    button:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
+    }
+    .status {
+      font-size: 12px;
+      color: #9aa0a6;
+    }
+    .small {
+      font-size: 12px;
+      color: #9aa0a6;
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>Omega Review</h1>
+    <div class="meta" id="meta">Loading...</div>
+
+    <div class="panel">
+      <label for="reviewer">Reviewer name (optional)</label>
+      <input id="reviewer" type="text" placeholder="Name"/>
+      <div style="height:10px"></div>
+      <label for="note">General note (optional)</label>
+      <textarea id="note" placeholder="Any overall notes for the producer"></textarea>
+      <div class="actions">
+        <button id="submit-btn">Submit Changes</button>
+        <span class="status" id="status"></span>
+      </div>
+      <div class="small">Only edit lines that need fixing. Timing is handled automatically.</div>
+    </div>
+
+    <div id="segments"></div>
+  </div>
+
+  <script>
+    const jobId = "{{ job_id }}";
+    const token = "{{ token }}";
+    const statusEl = document.getElementById("status");
+    const submitBtn = document.getElementById("submit-btn");
+    const segmentsEl = document.getElementById("segments");
+
+    function formatTime(seconds) {
+      if (seconds === null || seconds === undefined) return "--:--";
+      const total = Math.max(0, Number(seconds) || 0);
+      const h = Math.floor(total / 3600);
+      const m = Math.floor((total % 3600) / 60);
+      const s = Math.floor(total % 60);
+      const pad = (n) => String(n).padStart(2, "0");
+      return h > 0 ? `${h}:${pad(m)}:${pad(s)}` : `${pad(m)}:${pad(s)}`;
+    }
+
+    function renderSegments(data) {
+      const segments = data.segments || [];
+      const meta = document.getElementById("meta");
+      meta.textContent = `${data.stem || jobId} • ${data.target_language || ""} • ${data.program_profile || ""} • ${segments.length} segments`;
+
+      segmentsEl.innerHTML = "";
+      segments.forEach((seg) => {
+        const card = document.createElement("div");
+        card.className = "seg";
+
+        const header = document.createElement("div");
+        header.className = "seg-header";
+        header.textContent = `#${seg.id}  ${formatTime(seg.start)} → ${formatTime(seg.end)}`;
+
+        const source = document.createElement("div");
+        source.className = "source";
+        source.textContent = seg.source || "";
+
+        const label = document.createElement("label");
+        label.textContent = "Translation (editable)";
+
+        const textarea = document.createElement("textarea");
+        textarea.value = seg.translation || "";
+        textarea.dataset.original = seg.translation || "";
+        textarea.dataset.id = seg.id;
+
+        const commentLabel = document.createElement("label");
+        commentLabel.textContent = "Comment (optional)";
+        commentLabel.className = "small";
+
+        const comment = document.createElement("textarea");
+        comment.placeholder = "Optional note (e.g., wording or timing concern)";
+        comment.dataset.id = seg.id;
+        comment.className = "comment";
+
+        card.appendChild(header);
+        card.appendChild(source);
+        card.appendChild(label);
+        card.appendChild(textarea);
+        card.appendChild(commentLabel);
+        card.appendChild(comment);
+        segmentsEl.appendChild(card);
+      });
+    }
+
+    async function loadReview() {
+      if (!token) {
+        statusEl.textContent = "Missing token.";
+        submitBtn.disabled = true;
+        return;
+      }
+      statusEl.textContent = "Loading review...";
+      const res = await fetch(`/api/review/${jobId}?token=${encodeURIComponent(token)}`);
+      if (!res.ok) {
+        statusEl.textContent = "Unable to load review.";
+        submitBtn.disabled = true;
+        return;
+      }
+      const data = await res.json();
+      renderSegments(data);
+      statusEl.textContent = "Loaded.";
+    }
+
+    async function submitReview() {
+      const corrections = [];
+      const translations = document.querySelectorAll("textarea[data-id]");
+      const comments = document.querySelectorAll("textarea.comment");
+      const commentMap = {};
+      comments.forEach((item) => {
+        const id = item.dataset.id;
+        const value = (item.value || "").trim();
+        if (value) {
+          commentMap[id] = value;
+        }
+      });
+
+      translations.forEach((item) => {
+        const id = item.dataset.id;
+        const original = item.dataset.original || "";
+        const value = (item.value || "").trim();
+        const comment = commentMap[id] || "";
+        if (value !== original || comment) {
+          corrections.push({ id: Number(id), text: value, comment: comment });
+        }
+      });
+
+      submitBtn.disabled = true;
+      statusEl.textContent = "Submitting...";
+      const payload = {
+        token: token,
+        reviewer: document.getElementById("reviewer").value || "",
+        note: document.getElementById("note").value || "",
+        approved: true,
+        corrections: corrections
+      };
+      const res = await fetch(`/api/review/${jobId}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      });
+      if (res.ok) {
+        statusEl.textContent = "Submitted. Thank you!";
+      } else {
+        statusEl.textContent = "Submit failed. Please try again.";
+        submitBtn.disabled = false;
+      }
+    }
+
+    submitBtn.addEventListener("click", submitReview);
+    loadReview();
+  </script>
+</body>
+</html>

@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.omega.subtitleworkflow</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>/Users/haukurhauksson/SubtitleWorkflow/scripts/omega_supervisor.sh</string>
+  </array>
+  <key>WorkingDirectory</key>
+  <string>/Users/haukurhauksson/SubtitleWorkflow</string>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>StandardOutPath</key>
+  <string>/Users/haukurhauksson/SubtitleWorkflow/logs/launchd.out.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/haukurhauksson/SubtitleWorkflow/logs/launchd.err.log</string>
+</dict>
+</plist>
