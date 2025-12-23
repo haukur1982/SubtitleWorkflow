@@ -1,0 +1,17 @@
+steps:
+  - name: "gcr.io/cloud-builders/docker"
+    args:
+      - "build"
+      - "-t"
+      - "gcr.io/$PROJECT_ID/omega-transcriber"
+      - "-f"
+      - "cloud/transcriber/Dockerfile"
+      - "."
+    timeout: "1800s"  # 30 min - model download takes time
+
+images:
+  - "gcr.io/$PROJECT_ID/omega-transcriber"
+
+options:
+  machineType: "E2_HIGHCPU_8"
+  diskSizeGb: 100
