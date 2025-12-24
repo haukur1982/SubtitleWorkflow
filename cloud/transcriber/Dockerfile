@@ -14,7 +14,7 @@ RUN apt-get update && apt-get install -y \
 WORKDIR /app
 
 # 1. Install numpy first (before anything that might upgrade it)
-RUN pip install --no-cache-dir "numpy<2"
+RUN pip install --no-cache-dir numpy==1.26.4
 
 # 2. Install PyTorch 2.3.0 with CUDA 12.1 (known stable)
 RUN pip install --no-cache-dir \
@@ -29,11 +29,11 @@ RUN pip install --no-cache-dir ctranslate2==4.4.0
 RUN pip install --no-cache-dir faster-whisper==1.0.3
 
 # 5. Install whisperx WITHOUT its dependencies (we installed them above)
-RUN pip install --no-cache-dir --no-deps whisperx
+RUN pip install --no-cache-dir --no-deps whisperx==3.3.0
 
 # 6. Install remaining whisperx dependencies
 RUN pip install --no-cache-dir \
-    pyannote.audio \
+    pyannote.audio==3.3.2 \
     nltk \
     transformers \
     google-cloud-storage>=2.10.0
