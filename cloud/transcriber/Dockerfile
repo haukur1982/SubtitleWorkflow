@@ -1,4 +1,3 @@
-# Use CUDA 12.1 runtime (driver compatible with Cloud Run L4)
 FROM nvidia/cuda:12.1.1-cudnn8-runtime-ubuntu22.04
 
 ENV DEBIAN_FRONTEND=noninteractive
@@ -14,27 +13,39 @@ RUN apt-get update && apt-get install -y \
 
 WORKDIR /app
 
-# Pin numpy to version compatible with whisperx (before 2.0)
-RUN pip install --no-cache-dir numpy==1.26.4
+# 1. Install numpy first (before anything that might upgrade it)
+RUN pip install --no-cache-dir "numpy<2"
 
-# Install PyTorch 2.1.2 with CUDA 12.1 (stable, known-good version)
+# 2. Install PyTorch 2.3.0 with CUDA 12.1 (known stable)
 RUN pip install --no-cache-dir \
-    torch==2.1.2 \
-    torchaudio==2.1.2 \
+    torch==2.3.0+cu121 \
+    torchaudio==2.3.0+cu121 \
     --index-url https://download.pytorch.org/whl/cu121
 
-# Install WhisperX and GCS client
+# 3. Install ctranslate2 4.4.0 specifically (last cuDNN 8 compatible)
+RUN pip install --no-cache-dir ctranslate2==4.4.0
+
+# 4. Install faster-whisper compatible with ctranslate2 4.4.0
+RUN pip install --no-cache-dir faster-whisper==1.0.3
+
+# 5. Install whisperx WITHOUT its dependencies (we installed them above)
+RUN pip install --no-cache-dir --no-deps whisperx
+
+# 6. Install remaining whisperx dependencies
 RUN pip install --no-cache-dir \
-    whisperx \
+    pyannote.audio \
+    nltk \
+    transformers \
     google-cloud-storage>=2.10.0
 
 # Pre-download Whisper model
 RUN python -c "import whisperx; whisperx.load_model('large-v3', 'cpu', compute_type='float32')" || true
 
-# Copy transcriber service
 COPY cloud/transcriber/transcriber_service.py /app/transcriber_service.py
 
 ENTRYPOINT ["python", "-u", "transcriber_service.py"]
+
+
 
 
 
