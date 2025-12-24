@@ -19,6 +19,7 @@ from vertexai.generative_models import (
 
 import config
 import profiles
+from subtitle_standards import build_priority_context
 from gcp_auth import ensure_google_application_credentials
 from gcs_jobs import (
     GcsJobPaths,
@@ -50,16 +51,6 @@ MUSIC_MARKERS = (
     "[choir]",
 )
 
-MAX_CHARS_PER_LINE = 42
-MAX_LINES = 2
-MAX_CHARS_TOTAL = MAX_CHARS_PER_LINE * MAX_LINES
-IDEAL_CPS = 17.0
-TIGHT_CPS = 20.0
-MIN_DURATION = 1.0
-GAP_SECONDS = 0.1
-CONTEXT_GAP_MAX = 3.0
-MAX_PRIORITY_SEGMENTS = 120
-
 # Checkpoint validation - prevents stale checkpoints from wrong job/language/profile
 CHECKPOINT_SCHEMA_VERSION = 2
 
@@ -85,162 +76,6 @@ def _looks_like_speech(text: str) -> bool:
     if len(words) >= 2 and any(ch in (text or "") for ch in ".?!"):
         return True
     return False
-
-
-def _status_for_cps(cps: float) -> str:
-    if cps <= IDEAL_CPS:
-        return "OPTIMAL"
-    if cps <= TIGHT_CPS:
-        return "TIGHT"
-    return "CRITICAL"
-
-
-def _build_constraint_items(
-    source_segments: list[dict],
-    translated_segments: list[dict],
-) -> list[dict]:
-    trans_map: Dict[int, str] = {}
-    for seg in translated_segments or []:
-        try:
-            seg_id = int(seg.get("id"))
-        except Exception:
-            continue
-        text = str(seg.get("text") or "").strip()
-        if text:
-            trans_map[seg_id] = text
-
-    items: list[dict] = []
-    for idx, seg in enumerate(source_segments or []):
-        try:
-            seg_id = int(seg.get("id"))
-        except Exception:
-            continue
-        start = float(seg.get("start") or 0.0)
-        end = float(seg.get("end") or start)
-        duration = max(0.0, end - start)
-        next_start = None
-        if idx + 1 < len(source_segments):
-            try:
-                next_start = float(source_segments[idx + 1].get("start") or 0.0)
-            except Exception:
-                next_start = None
-        gap_to_next = None
-        max_available = None
-        if next_start is not None:
-            gap_to_next = next_start - end
-            max_available = max(0.0, (next_start - GAP_SECONDS) - start)
-
-        effective_duration = max(duration, MIN_DURATION)
-        if max_available is not None and max_available > 0:
-            effective_duration = min(effective_duration, max_available)
-
-        text = trans_map.get(seg_id) or ""
-        char_count = len(text)
-        cps = (char_count / effective_duration) if effective_duration > 0 else 0.0
-        status = _status_for_cps(cps) if text else "OPTIMAL"
-
-        items.append(
-            {
-                "id": seg_id,
-                "duration": round(duration, 3),
-                "effective_duration": round(effective_duration, 3),
-                "gap_to_next": round(gap_to_next, 3) if gap_to_next is not None else None,
-                "max_chars_total": MAX_CHARS_TOTAL,
-                "max_chars_per_line": MAX_CHARS_PER_LINE,
-                "target_cps": IDEAL_CPS,
-                "current_cps": round(cps, 2),
-                "status": status,
-            }
-        )
-    return items
-
-
-def _build_priority_context(
-    source_segments: list[dict],
-    translated_segments: list[dict],
-    *,
-    include_tight: bool = True,
-) -> list[dict]:
-    items = _build_constraint_items(source_segments, translated_segments)
-    trans_map: Dict[int, str] = {}
-    for seg in translated_segments or []:
-        try:
-            seg_id = int(seg.get("id"))
-        except Exception:
-            continue
-        trans_map[seg_id] = str(seg.get("text") or "").strip()
-
-    priority = []
-    for idx, item in enumerate(items):
-        status = item.get("status")
-        if status == "CRITICAL" or (include_tight and status == "TIGHT"):
-            priority.append((idx, item))
-
-    critical = [entry for entry in priority if entry[1].get("status") == "CRITICAL"]
-    tight = [entry for entry in priority if entry[1].get("status") == "TIGHT"]
-    critical.sort(key=lambda entry: entry[1].get("current_cps", 0.0), reverse=True)
-    tight.sort(key=lambda entry: entry[1].get("current_cps", 0.0), reverse=True)
-
-    selected = []
-    for entry in critical:
-        if len(selected) >= MAX_PRIORITY_SEGMENTS:
-            break
-        selected.append(entry)
-    if len(selected) < MAX_PRIORITY_SEGMENTS:
-        for entry in tight:
-            if len(selected) >= MAX_PRIORITY_SEGMENTS:
-                break
-            selected.append(entry)
-
-    result = []
-    for idx, item in selected:
-        seg = source_segments[idx]
-        start = float(seg.get("start") or 0.0)
-        end = float(seg.get("end") or start)
-        prev_ctx = None
-        if idx > 0:
-            prev_seg = source_segments[idx - 1]
-            prev_end = float(prev_seg.get("end") or 0.0)
-            if start - prev_end <= CONTEXT_GAP_MAX:
-                prev_id = int(prev_seg.get("id"))
-                prev_ctx = {
-                    "id": prev_id,
-                    "src": str(prev_seg.get("text") or "").strip(),
-                    "draft": trans_map.get(prev_id, ""),
-                }
-        next_ctx = None
-        if idx + 1 < len(source_segments):
-            next_seg = source_segments[idx + 1]
-            next_start = float(next_seg.get("start") or 0.0)
-            if next_start - end <= CONTEXT_GAP_MAX:
-                next_id = int(next_seg.get("id"))
-                next_ctx = {
-                    "id": next_id,
-                    "src": str(next_seg.get("text") or "").strip(),
-                    "draft": trans_map.get(next_id, ""),
-                }
-
-        active = {
-            "id": item["id"],
-            "src": str(seg.get("text") or "").strip(),
-            "draft": trans_map.get(item["id"], ""),
-            "effective_duration": item["effective_duration"],
-            "gap_to_next": item["gap_to_next"],
-            "target_cps": item["target_cps"],
-            "max_chars_total": item["max_chars_total"],
-            "max_chars_per_line": item["max_chars_per_line"],
-            "current_cps": item["current_cps"],
-            "status": item["status"],
-        }
-
-        result.append(
-            {
-                "context_prev": prev_ctx,
-                "active": active,
-                "context_next": next_ctx,
-            }
-        )
-    return result
 
 
 def _is_truthy(value: object) -> bool:
@@ -997,6 +832,8 @@ def run_job(*, bucket: str, prefix: str, job_id: str) -> None:
     music_chunk_size = max(20, min(music_chunk_size, 240))
     polish_max_fixes = int(os.environ.get("OMEGA_CLOUD_POLISH_MAX_FIXES", "8") or 8)
     polish_max_fixes = max(0, min(polish_max_fixes, 20))
+    max_editor_attempts = int(os.environ.get("OMEGA_CLOUD_EDITOR_MAX_ATTEMPTS", "3") or 3)
+    max_editor_attempts = max(1, min(max_editor_attempts, 5))
     doc_brief_segments = int(os.environ.get("OMEGA_CLOUD_DOC_BRIEF_SEGMENTS", "120") or 120)
     doc_brief_segments = max(20, min(doc_brief_segments, 240))
     doc_brief_chars = int(os.environ.get("OMEGA_CLOUD_DOC_BRIEF_CHARS", "12000") or 12000)
@@ -1203,12 +1040,42 @@ def run_job(*, bucket: str, prefix: str, job_id: str) -> None:
         translated_segments=review_segments,
         lang_suffix=target_language_code.upper(),
     )
-    editor_response = editor_model.generate_content(
-        editor_prompt,
-        generation_config=GenerationConfig(response_mime_type="application/json", temperature=0.1),
-    )
-
-    corrections, report = _parse_editor_response(getattr(editor_response, "text", "") or "")
+    corrections: list[dict] = []
+    report: dict = {}
+    for attempt in range(1, max_editor_attempts + 1):
+        try:
+            editor_response = editor_model.generate_content(
+                editor_prompt,
+                generation_config=GenerationConfig(
+                    response_mime_type="application/json",
+                    response_schema={
+                        "type": "object",
+                        "properties": {
+                            "corrections": {
+                                "type": "array",
+                                "items": {
+                                    "type": "object",
+                                    "properties": {
+                                        "id": {"type": "integer"},
+                                        "fix": {"type": "string"},
+                                        "reason": {"type": "string"},
+                                    },
+                                    "required": ["id", "fix"],
+                                },
+                            },
+                            "report": {"type": "object"},
+                        },
+                        "required": ["corrections", "report"],
+                    },
+                    temperature=0.1,
+                ),
+                safety_settings=SAFETY_SETTINGS,
+            )
+            corrections, report = _parse_editor_response(getattr(editor_response, "text", "") or "")
+            break
+        except Exception as exc:
+            logger.warning("   ⚠️ Chief editor retry %s/%s: %s", attempt, max_editor_attempts, exc)
+            backoff_sleep(attempt)
     approved_segments = _apply_editor_corrections(
         source_segments=segments,
         translated_segments=review_segments,
@@ -1221,12 +1088,12 @@ def run_job(*, bucket: str, prefix: str, job_id: str) -> None:
             storage_client,
             paths=paths,
             stage="CLOUD_POLISHING",
-            status="Polishing (global sweep)",
+            status="Senior Polish Editor reviewing",
             progress=70.0,
             meta={"polish_max_fixes": polish_max_fixes},
         )
         polish_model = GenerativeModel(polish_model_name)
-        polish_prompt = _build_polish_prompt(
+        polish_prompt = _build_polish_prompt_v2(
             source_segments=segments,
             translated_segments=approved_segments,
             lang_suffix=target_language_code.upper(),
@@ -1234,29 +1101,19 @@ def run_job(*, bucket: str, prefix: str, job_id: str) -> None:
         )
         polish_corrections: list[dict] = []
         try:
+            # Use simple text generation (no JSON schema) for faster inference
+            # This mimics the Gem Chat experience which is 10x faster
             polish_response = polish_model.generate_content(
                 polish_prompt,
-                generation_config=GenerationConfig(
-                    response_mime_type="application/json",
-                    response_schema={
-                        "type": "array",
-                        "items": {
-                            "type": "object",
-                            "properties": {
-                                "id": {"type": "integer"},
-                                "fix": {"type": "string"},
-                                "reason": {"type": "string"},
-                            },
-                            "required": ["id", "fix"],
-                        },
-                    },
-                    temperature=0.15,
-                ),
+                generation_config=GenerationConfig(temperature=0.15),
                 safety_settings=SAFETY_SETTINGS,
             )
-            polish_corrections = _parse_polish_corrections(getattr(polish_response, "text", "") or "")
+            polish_corrections = _parse_polish_response_v2(
+                getattr(polish_response, "text", "") or "",
+                valid_ids=set(int(seg.get("id")) for seg in approved_segments if seg.get("id")),
+            )
         except Exception as exc:
-            logger.warning("   ⚠️ Global polish failed: %s", exc)
+            logger.warning("   ⚠️ Senior polish failed: %s", exc)
             polish_corrections = []
 
         if polish_corrections:
@@ -1294,7 +1151,7 @@ def run_job(*, bucket: str, prefix: str, job_id: str) -> None:
 
 
 def _build_editor_prompt(*, source_segments: list[dict], translated_segments: list[dict], lang_suffix: str) -> str:
-    priority_context = _build_priority_context(source_segments, translated_segments, include_tight=True)
+    priority_context = build_priority_context(source_segments, translated_segments, include_tight=True)
     if lang_suffix.upper() in {"ICELANDIC", "IS"}:
         return f"""
 ROLE: You are the Chief Editor and Quality Control Auditor for Omega TV.
@@ -1444,6 +1301,117 @@ SOURCE (English):
 TRANSLATION ({lang_label}):
 {json.dumps(translated_payload, ensure_ascii=False)}
 """
+
+
+def _build_polish_prompt_v2(
+    *,
+    source_segments: list[dict],
+    translated_segments: list[dict],
+    lang_suffix: str,
+    max_fixes: int,
+) -> str:
+    """
+    Gem-style polish prompt: simple text output, no JSON schema.
+    Based on user's proven Omega Chief Editor Gem that works in 5 seconds.
+    """
+    # Build SRT-like format for natural reading
+    lines: list[str] = []
+    trans_map = {int(s.get("id")): s.get("text", "") for s in translated_segments if s.get("id")}
+    for seg in source_segments or []:
+        try:
+            seg_id = int(seg.get("id"))
+        except Exception:
+            continue
+        source_text = str(seg.get("text") or "").strip()
+        trans_text = str(trans_map.get(seg_id, "")).strip()
+        if source_text or trans_text:
+            lines.append(f"[{seg_id}] EN: {source_text}")
+            lines.append(f"    IS: {trans_text}")
+            lines.append("")
+    
+    content = "\n".join(lines)
+    max_fixes = max(0, int(max_fixes))
+    
+    return f"""
+ROLE: You are the Senior Polish Editor at Omega TV — a native Icelandic speaker with 20 years in broadcast subtitling.
+
+CONTEXT:
+This translation has been through Lead Translator and Chief Editor. Your role is the FINAL QUALITY GATE.
+
+YOUR EXPERTISE:
+- Native Icelandic (not "þýðingamál" / translation-isms)
+- Theological Icelandic (Biblían 2007, "Þú" for God)
+- Broadcast constraints (14-17 CPS, natural flow)
+
+GOLD STANDARD RULES:
+- "I AM" (Divine) → "ÉG ER" (capitalized)
+- "Covenant" → "Sáttmáli"
+- "Partners" → "Bakhjarlar"
+- "Evangelist" → "Trúboði"
+- Address God as "Þú" (NOT "Þér")
+- Remove stutters, make it broadcast-clean
+
+TASK:
+Read as a native viewer. Find ONLY lines that:
+1. Sound unnatural to an Icelandic ear
+2. Use "þýðingamál" instead of natural Icelandic
+3. Have theological errors
+
+Limit to at most {max_fixes} fixes. If translation is already excellent, say "Ekkert að athuga."
+
+OUTPUT FORMAT:
+📊 Rating: X/10
+🔧 Fixes (if any):
+[ID]: "original text" → "improved text" // reason
+
+CONTENT TO REVIEW:
+{content}
+"""
+
+
+def _parse_polish_response_v2(text: str, *, valid_ids: set[int]) -> list[dict]:
+    """
+    Parse simple text response from Gem-style polish prompt.
+    Looks for pattern: [ID]: "old" → "new" // reason
+    """
+    import re
+    corrections: list[dict] = []
+    
+    # Pattern: [123]: "old text" → "new text" 
+    # or [123]: "old" -> "new"
+    # The → can be -> or →
+    pattern = re.compile(
+        r'\[(\d+)\]:\s*["\']?([^"\'→\->]+)["\']?\s*(?:→|->)\s*["\']?([^"\']+)["\']?\s*(?://\s*(.*))?',
+        re.UNICODE
+    )
+    
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or line.startswith("📊") or line.startswith("🔧"):
+            continue
+        if "ekkert" in line.lower() or "nothing" in line.lower():
+            continue
+            
+        match = pattern.search(line)
+        if match:
+            try:
+                seg_id = int(match.group(1))
+                if seg_id not in valid_ids:
+                    continue
+                fix = match.group(3).strip().strip('"\'')
+                reason = (match.group(4) or "").strip()
+                if fix:
+                    corrections.append({
+                        "id": seg_id,
+                        "fix": fix,
+                        "reason": reason,
+                    })
+            except (ValueError, IndexError):
+                continue
+    
+    return corrections
+
+
 
 
 def _parse_polish_corrections(text: str) -> list[dict]:
