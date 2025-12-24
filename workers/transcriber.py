@@ -195,14 +195,74 @@ def ingest(file_path: Path):
 
 def transcribe(audio_path: Path):
     """
-    Runs WhisperX on the audio file.
+    Transcribes audio to skeleton JSON.
+    
+    Routes to AssemblyAI (fast, cloud) or WhisperX (local) based on config.
+    Default: AssemblyAI if API key is set.
+    
+    If OMEGA_DEMUCS_ENABLED=1, first extracts vocals to remove background music.
+    """
+    stem = audio_path.stem
+    
+    # Step 1: Demucs vocal extraction (optional, removes background music)
+    transcription_audio = audio_path
+    
+    if getattr(config, "OMEGA_DEMUCS_ENABLED", False):
+        try:
+            from workers.vocal_extractor import extract_vocals, is_demucs_available
+            
+            if is_demucs_available():
+                logger.info(f"🎵 Extracting vocals (removing background music)...")
+                omega_db.update(stem, status="Extracting vocals (Demucs)", progress=8.0)
+                
+                vocals_path = extract_vocals(
+                    audio_path,
+                    output_dir=audio_path.parent,
+                    model=getattr(config, "OMEGA_DEMUCS_MODEL", "htdemucs_ft"),
+                    device=getattr(config, "OMEGA_DEMUCS_DEVICE", "mps"),
+                )
+                
+                if vocals_path and vocals_path.exists():
+                    logger.info(f"✅ Using vocals track: {vocals_path.name}")
+                    transcription_audio = vocals_path
+                else:
+                    logger.warning("⚠️ Vocal extraction failed, using original audio")
+            else:
+                logger.debug("Demucs not available, skipping vocal extraction")
+                
+        except Exception as e:
+            logger.warning(f"⚠️ Demucs error, using original audio: {e}")
+    
+    # Step 2: Transcription
+    # Route to AssemblyAI if configured
+    use_assemblyai = (
+        config.OMEGA_TRANSCRIBER == "assemblyai" 
+        and config.ASSEMBLYAI_API_KEY
+    )
+    
+    if use_assemblyai:
+        try:
+            from workers import transcriber_assemblyai
+            return transcriber_assemblyai.transcribe_assemblyai(transcription_audio)
+        except Exception as e:
+            logger.warning(f"⚠️ AssemblyAI failed, falling back to WhisperX: {e}")
+            # Fall through to WhisperX
+    
+    # WhisperX (local) transcription
+    return _transcribe_whisperx(transcription_audio)
+
+
+def _transcribe_whisperx(audio_path: Path):
+    """
+    Runs WhisperX locally on the audio file.
     Returns path to Skeleton JSON.
     """
     stem = audio_path.stem
     output_dir = config.VAULT_DATA
     
-    logger.info(f"📝 Transcribing: {stem}")
+    logger.info(f"📝 Transcribing (WhisperX): {stem}")
     
+    compute_type = (config.WHISPER_COMPUTE or "float32").strip() or "float32"
     cmd = [
         str(config.WHISPER_BIN),
         str(audio_path),
@@ -210,7 +270,7 @@ def transcribe(audio_path: Path):
         "--language", "en",
         "--output_dir", str(output_dir),
         "--output_format", "json",
-        "--compute_type", "float32", # int8 caused crashes on M1 Pro
+        "--compute_type", compute_type,
         "--batch_size", "1", # Reduce batch size to prevent OOM
         "--device", config.WHISPER_DEVICE,
         "--print_progress", "True"
@@ -259,7 +319,11 @@ def transcribe(audio_path: Path):
         if not proc.stdout:
             raise RuntimeError("WhisperX did not return a stdout pipe")
 
+        env_idle = os.environ.get("OMEGA_ASR_IDLE_TIMEOUT")
         idle_timeout = _safe_float_env("OMEGA_ASR_IDLE_TIMEOUT", 900.0)
+        if env_idle is None and total_seconds:
+            idle_timeout = max(idle_timeout, min(total_seconds * 1.5, 4 * 3600))
+        logger.info("WhisperX idle timeout set to %.0fs", idle_timeout)
         start_time = time.time()
         last_output = start_time
 
@@ -381,7 +445,7 @@ def transcribe(audio_path: Path):
                     "--language", "en",
                     "--output_dir", str(output_dir),
                     "--output_format", "json",
-                    "--compute_type", "float32",
+                    "--compute_type", compute_type,
                     "--batch_size", "1",
                     "--device", config.WHISPER_DEVICE,
                     "--vad_onset", str(safety_onset),

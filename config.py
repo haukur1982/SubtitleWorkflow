@@ -75,7 +75,15 @@ def get_binary(name, default):
 
 FFMPEG_BIN = get_binary("ffmpeg", "ffmpeg")
 FFPROBE_BIN = get_binary("ffprobe", "ffprobe")
-WHISPER_BIN = os.environ.get("OMEGA_WHISPER_BIN", "").strip() or get_binary("whisperx", "whisperx")
+
+# WhisperX lives in Python 3.9's user bin (not the venv's Python 3.11)
+# Priority: OMEGA_WHISPER_BIN env var > explicit Python 3.9 path > generic lookup
+_WHISPERX_PY39 = Path.home() / "Library" / "Python" / "3.9" / "bin" / "whisperx"
+WHISPER_BIN = (
+    os.environ.get("OMEGA_WHISPER_BIN", "").strip()
+    or (str(_WHISPERX_PY39) if _WHISPERX_PY39.exists() else None)
+    or get_binary("whisperx", "whisperx")
+)
 
 # --- STORAGE READINESS ---
 _WRITE_PROBE_CACHE = {}
@@ -131,9 +139,10 @@ def critical_paths_ready(require_write: bool = False) -> bool:
 
 # --- SETTINGS ---
 # Whisper
-WHISPER_MODEL = "large-v3"
-WHISPER_COMPUTE = "int8"
-WHISPER_DEVICE = "cpu"
+WHISPER_MODEL = os.environ.get("OMEGA_WHISPER_MODEL", "large-v3").strip() or "large-v3"
+# float32 is safest on macOS; override via OMEGA_WHISPER_COMPUTE if needed.
+WHISPER_COMPUTE = os.environ.get("OMEGA_WHISPER_COMPUTE", "float32").strip() or "float32"
+WHISPER_DEVICE = os.environ.get("OMEGA_WHISPER_DEVICE", "cpu").strip() or "cpu"
 
 # Gemini Models
 # ⚠️ CRITICAL: NEVER USE GEMINI 1.5. IT IS BANNED.
@@ -155,6 +164,25 @@ OMEGA_CLOUD_MUSIC_DETECT = os.environ.get("OMEGA_CLOUD_MUSIC_DETECT", "1").strip
 OMEGA_CLOUD_RUN_JOB = os.environ.get("OMEGA_CLOUD_RUN_JOB", "").strip()
 OMEGA_CLOUD_RUN_REGION = os.environ.get("OMEGA_CLOUD_RUN_REGION", "us-central1").strip() or "us-central1"
 OMEGA_CLOUD_PROJECT = os.environ.get("OMEGA_CLOUD_PROJECT", "").strip()
+
+# --- ASSEMBLYAI TRANSCRIPTION ---
+# API key for AssemblyAI (get from https://www.assemblyai.com)
+ASSEMBLYAI_API_KEY = os.environ.get("ASSEMBLYAI_API_KEY", "").strip()
+# Transcriber backend: "assemblyai" (fast, cloud) or "whisperx" (local, slower)
+OMEGA_TRANSCRIBER = os.environ.get("OMEGA_TRANSCRIBER", "assemblyai").strip().lower()
+# Additional words to boost for transcription accuracy (comma-separated)
+ASSEMBLYAI_WORD_BOOST = os.environ.get("ASSEMBLYAI_WORD_BOOST", "").strip()
+# Word boost weight: "low", "default", or "high"
+ASSEMBLYAI_BOOST_WEIGHT = os.environ.get("ASSEMBLYAI_BOOST_WEIGHT", "high").strip()
+
+# --- DEMUCS VOCAL EXTRACTION ---
+# Enable Demucs to remove background music before transcription (requires M2 Mac)
+# This prevents AssemblyAI from transcribing background lyrics
+OMEGA_DEMUCS_ENABLED = os.environ.get("OMEGA_DEMUCS_ENABLED", "1").strip().lower() in {"1", "true", "yes", "on"}
+# Demucs model: "htdemucs_ft" (best quality) or "htdemucs" (faster)
+OMEGA_DEMUCS_MODEL = os.environ.get("OMEGA_DEMUCS_MODEL", "htdemucs_ft").strip()
+# Device: "mps" (Apple Silicon GPU), "cpu", or "cuda" (Nvidia)
+OMEGA_DEMUCS_DEVICE = os.environ.get("OMEGA_DEMUCS_DEVICE", "mps").strip()
 
 # Style Map
 STYLE_MAP = {
