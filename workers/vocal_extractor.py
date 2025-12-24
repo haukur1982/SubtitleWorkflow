@@ -23,9 +23,9 @@ from typing import Optional
 
 logger = logging.getLogger("OmegaManager.VocalExtractor")
 
-# Demucs model - htdemucs_ft is fine-tuned for best quality
-# htdemucs is faster but slightly lower quality
-DEFAULT_MODEL = "htdemucs_ft"
+# Demucs model - htdemucs is fast (5-8x realtime)
+# htdemucs_ft is slower but slightly higher quality
+DEFAULT_MODEL = "htdemucs"
 
 # Use MPS (Metal Performance Shaders) for Apple Silicon GPU
 DEFAULT_DEVICE = "mps"

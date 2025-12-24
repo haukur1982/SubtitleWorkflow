@@ -179,8 +179,8 @@ ASSEMBLYAI_BOOST_WEIGHT = os.environ.get("ASSEMBLYAI_BOOST_WEIGHT", "high").stri
 # Enable Demucs to remove background music before transcription (requires M2 Mac)
 # This prevents AssemblyAI from transcribing background lyrics
 OMEGA_DEMUCS_ENABLED = os.environ.get("OMEGA_DEMUCS_ENABLED", "1").strip().lower() in {"1", "true", "yes", "on"}
-# Demucs model: "htdemucs_ft" (best quality) or "htdemucs" (faster)
-OMEGA_DEMUCS_MODEL = os.environ.get("OMEGA_DEMUCS_MODEL", "htdemucs_ft").strip()
+# Demucs model: "htdemucs" (fast, ~8-12 min/hour) or "htdemucs_ft" (slower, best quality)
+OMEGA_DEMUCS_MODEL = os.environ.get("OMEGA_DEMUCS_MODEL", "htdemucs").strip()
 # Device: "mps" (Apple Silicon GPU), "cpu", or "cuda" (Nvidia)
 OMEGA_DEMUCS_DEVICE = os.environ.get("OMEGA_DEMUCS_DEVICE", "mps").strip()
 
