@@ -233,6 +233,10 @@ def transcribe_assemblyai(audio_path: Path, max_retries: int = 3) -> Path:
         raise ValueError("ASSEMBLYAI_API_KEY not configured")
     
     stem = audio_path.stem
+    # Strip _VOCALS suffix if Demucs was used (maintain original job name)
+    if stem.endswith("_VOCALS"):
+        stem = stem[:-7]  # Remove "_VOCALS" suffix
+    
     output_dir = config.VAULT_DATA
     skeleton_path = output_dir / f"{stem}_SKELETON.json"
     
