@@ -1,0 +1,4 @@
+[core]
+project = sermon-translator-system
+account = ranslator-bot@sermon-translator-system.iam.gserviceaccount.com
+

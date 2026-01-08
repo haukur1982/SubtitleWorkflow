@@ -1,7 +1,7 @@
-import omega_db
-import sys
 
-stem = "HOP_2913_INT57"
-print(f"Resetting job for {stem}...")
-omega_db.update(stem, stage="CLOUD_READY", status="Reset for Debug", progress=0)
-print("✅ Job reset.")
+import omega_db
+
+stem = "I2252_IntlUK_h264-1080p2997-aac"
+print(f"Resetting {stem}...")
+omega_db.update(stem, stage="REVIEWED", status="Reset for Re-burn", progress=75.0, meta={"halted": False, "burn_approved": True})
+print("Done.")

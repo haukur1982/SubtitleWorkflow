@@ -203,6 +203,9 @@ Configuration (Key Env Vars)
 Runtime:
 - OMEGA_PYTHON: python binary used by start_omega.sh
 - OMEGA_WHISPER_BIN: path to whisperx CLI
+- OMEGA_WHISPER_MODEL: Whisper model name (default: large-v3)
+- OMEGA_WHISPER_COMPUTE: compute type (default: float32)
+- OMEGA_WHISPER_DEVICE: device (cpu/mps/cuda)
 - TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD: required for whisperx VAD loading
 
 Cloud:
@@ -214,6 +217,7 @@ Cloud:
 
 Transcription:
 - OMEGA_ASR_IDLE_TIMEOUT (seconds)
+- If unset, idle timeout scales with audio duration (max 4h) to avoid false stalls.
 - OMEGA_ASR_SAFETY_PASS (1/0)
 - OMEGA_ASR_SAFETY_SECONDS
 - OMEGA_ASR_SAFETY_GAP
@@ -222,6 +226,11 @@ Transcription:
 - OMEGA_ASR_SAFETY_VAD_ONSET
 - OMEGA_ASR_SAFETY_VAD_OFFSET
 - OMEGA_ASR_SAFETY_CHUNK_SIZE
+
+Ingest:
+- OMEGA_INGEST_STABILITY_CHECKS (default: 3)
+- OMEGA_INGEST_STABILITY_DELAY (default: 1.0s)
+- OMEGA_INGEST_MIN_AGE (default: 3.0s)
 
 Stall recovery:
 - OMEGA_INGEST_STALL_SECONDS (default: 1800s / 30min)
@@ -246,6 +255,15 @@ Cloud Models
 - config.MODEL_EDITOR
 - config.MODEL_POLISH
 - config.GEMINI_LOCATION
+
+Overlay Rendering
+-----------------
+- OMEGA_OVERLAY_WORKERS (default: cpu_count-1, capped at 4)
+- OMEGA_OVERLAY_CHUNK_SIZE (default: 100 frames)
+
+Cloud Review
+------------
+- OMEGA_CLOUD_EDITOR_MAX_ATTEMPTS (default: 3)
 
 Known Fragilities
 -----------------
@@ -311,4 +329,3 @@ Appendix: Misc / Utility Scripts
 - monitor.sh, monitor_v2.sh
 - debug_* scripts and audit files
 - legacy/ and legacy_backup/
-

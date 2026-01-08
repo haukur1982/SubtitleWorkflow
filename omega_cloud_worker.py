@@ -24,8 +24,11 @@ from gcp_auth import ensure_google_application_credentials
 from gcs_jobs import (
     GcsJobPaths,
     backoff_sleep,
+    is_rate_limit_error,
+    rate_limit_backoff,
     blob_exists,
     download_json,
+    try_download_json,
     upload_json,
     utc_iso_now,
 )
@@ -197,6 +200,7 @@ def _translate_chunk_once(
     program_profile: str,
     continuity: list[dict],
     doc_brief: str,
+    extra_terms: dict = None,
 ) -> list[dict]:
     input_payload = [{"id": int(seg["id"]), "text": str(seg.get("text") or "").strip()} for seg in chunk]
 
@@ -210,7 +214,7 @@ def _translate_chunk_once(
         if seg.get("translated")
     ]
 
-    system_instruction = profiles.get_system_instruction(target_language_code, program_profile)
+    system_instruction = profiles.get_system_instruction(target_language_code, program_profile, extra_terms=extra_terms)
     brief_block = ""
     if doc_brief:
         brief_block = f"""
@@ -219,27 +223,30 @@ DOCUMENT BRIEF (for consistency only; do not infer facts):
 """
 
     prompt = f"""
-ROLE: You are the Lead Translator for Omega TV.
+ROLE: You are the Lead Translator for Omega TV (Professional Broadcast Subtitles).
 
 SYSTEM INSTRUCTION (obey strictly):
 {system_instruction}
 
 TASK:
-- Translate the INPUT segments to {target_language_name}.
-- Return ONLY JSON (no markdown fences).
-- Output MUST be a JSON array of objects: {{ "id": <int>, "text": <string> }}.
-- Output MUST contain EXACTLY the IDs from INPUT (no extras, none missing).
+1. Translate the INPUT segments into natural, spoken {target_language_name}.
+2. Ensure the translation flows smoothly across segment boundaries.
+3. Respect the TONE and KEYWORDS from the Document Brief if provided.
+4. Return ONLY a valid JSON array of objects: {{ "id": <int>, "text": <string> }}.
+5. STRICTLY preserve all IDs from the input. No extras, none missing.
 
-BROADCAST CAPS:
-- Do NOT output ALL CAPS sentences.
-- If the source text is ALL CAPS, convert to natural sentence case.
-- Preserve acronyms/initialisms (USA, TV, I-690) and mandatory titles (ÉG ER / YO SOY).
+STYLE GUIDELINES:
+- **Natural Flow**: Translate meaning, not just words. Avoid "Translationese".
+- **Conciseness**: Subtitles must be readable. Condensed phrasing is preferred over wordy literalism.
+- **Formatting**: Do NOT use ALL CAPS. Use standard sentence case.
+- **Terminlogy**: Keep proper nouns, acronyms (USA, TV, I-690), and mandated titles (ÉG ER / YO SOY) exactly as required.
+
 {brief_block}
 
-CONTEXT (for consistency only; DO NOT translate these IDs again):
+CONTINUITY CONTEXT (Preceding segments - for flow only):
 {json.dumps(continuity_payload, ensure_ascii=False)}
 
-INPUT:
+INPUT SEGMENTS (Translate these):
 {json.dumps(input_payload, ensure_ascii=False)}
 """
 
@@ -303,6 +310,7 @@ def _translate_chunk(
     doc_brief: str,
     max_attempts: int,
     split_after_attempts: int,
+    extra_terms: dict = None,
     _depth: int = 0,
 ) -> list[dict]:
     if not chunk:
@@ -319,6 +327,7 @@ def _translate_chunk(
                 program_profile=program_profile,
                 continuity=continuity,
                 doc_brief=doc_brief,
+                extra_terms=extra_terms,
             )
         except (json.JSONDecodeError, ValueError) as exc:
             last_exc = exc
@@ -328,8 +337,12 @@ def _translate_chunk(
             backoff_sleep(attempt)
         except Exception as exc:
             last_exc = exc
-            logger.warning("   ⚠️ Translate retry %s/%s: %s", attempt, max_attempts, exc)
-            backoff_sleep(attempt)
+            if is_rate_limit_error(exc):
+                logger.warning("   ⏳ Rate limit hit (retry %s/%s): %s", attempt, max_attempts, exc)
+                rate_limit_backoff(attempt)
+            else:
+                logger.warning("   ⚠️ Translate retry %s/%s: %s", attempt, max_attempts, exc)
+                backoff_sleep(attempt)
 
     if len(chunk) <= 1:
         raise last_exc or RuntimeError("Chunk translation failed")
@@ -350,6 +363,7 @@ def _translate_chunk(
         continuity=continuity,
         doc_brief=doc_brief,
         max_attempts=max_attempts,
+        extra_terms=extra_terms,
         split_after_attempts=split_after_attempts,
         _depth=_depth + 1,
     )
@@ -363,6 +377,7 @@ def _translate_chunk(
         continuity=tail_context,
         doc_brief=doc_brief,
         max_attempts=max_attempts,
+        extra_terms=extra_terms,
         split_after_attempts=split_after_attempts,
         _depth=_depth + 1,
     )
@@ -393,7 +408,8 @@ TASK:
 - Identify segments that are clearly music/lyrics/choir/worship singing (non-spoken content).
 - Be conservative: ONLY return IDs when you are confident it is singing/lyrics.
 - Do NOT mark segments where speakers merely talk about music.
-- If speech is present over music (e.g., organ under speech), do NOT mark it as music.
+- CRITICAL: If speech is present over music (e.g., organ/piano under speech), do NOT mark it as music. This is common in sermons.
+- CRITICAL: If the text looks like an Intro or Greeting ("Welcome", "Hallelujah", "Amen"), ASSUME SPEECH.
 - Return ONLY JSON (no markdown fences).
 - Output MUST be a JSON array of integer IDs.
 
@@ -540,6 +556,7 @@ def _polish_chunk_once(
     program_profile: str,
     continuity: list[dict],
     doc_brief: str,
+    extra_terms: dict = None,
 ) -> list[dict]:
     input_payload = [
         {
@@ -559,7 +576,7 @@ def _polish_chunk_once(
         if seg.get("translated")
     ]
 
-    system_instruction = profiles.get_system_instruction(target_language_code, program_profile)
+    system_instruction = profiles.get_system_instruction(target_language_code, program_profile, extra_terms=extra_terms)
     brief_block = ""
     if doc_brief:
         brief_block = f"""
@@ -574,20 +591,25 @@ SYSTEM INSTRUCTION (obey strictly):
 {system_instruction}
 
 TASK:
-- Polish the DRAFT translation into natural, broadcast-ready {target_language_name}.
-- Preserve the SOURCE meaning exactly (no added or missing information).
-- Keep names, scripture references, and theological terms intact.
-- Be concise to reduce CPS; remove filler and tighten phrasing.
-- Return ONLY JSON (no markdown fences).
-- Output MUST be a JSON array of objects: {{ "id": <int>, "text": <string> }}.
-- Output MUST contain EXACTLY the IDs from INPUT (no extras, none missing).
-- Do NOT output ALL CAPS sentences. Preserve acronyms/initialisms and mandatory titles.
+1. Review the DRAFT translation against the SOURCE.
+2. POLISH the text to be natural, idiomatic {target_language_name} suitable for TV broadcast.
+3. Fix any mistranslations, awkward phrasing, or grammatical errors.
+4. Ensure theological accuracy and consistency with the Document Brief.
+5. Return ONLY a valid JSON array of objects: {{ "id": <int>, "text": <string> }}.
+6. STRICTLY preserve all IDs.
+
+EDITING RULES:
+- **No Hallucinations**: Do not add information not present in the source.
+- **Broadcast Style**: Remove filler words. Make it punchy and clear.
+- **Formatting**: Sentence case only. No ALL CAPS.
+- **Consistency**: Ensure the flow matches the preceding context.
+
 {brief_block}
 
-CONTEXT (for consistency only; DO NOT rewrite these IDs):
+CONTINUITY CONTEXT (Preceding segments - for flow only):
 {json.dumps(continuity_payload, ensure_ascii=False)}
 
-INPUT:
+INPUT SEGMENTS (Polish these):
 {json.dumps(input_payload, ensure_ascii=False)}
 """
 
@@ -651,6 +673,7 @@ def _polish_chunk(
     doc_brief: str,
     max_attempts: int,
     split_after_attempts: int,
+    extra_terms: dict = None,
     _depth: int = 0,
 ) -> list[dict]:
     if not chunk:
@@ -667,6 +690,7 @@ def _polish_chunk(
                 program_profile=program_profile,
                 continuity=continuity,
                 doc_brief=doc_brief,
+                extra_terms=extra_terms,
             )
         except (json.JSONDecodeError, ValueError) as exc:
             last_exc = exc
@@ -698,6 +722,7 @@ def _polish_chunk(
         continuity=continuity,
         doc_brief=doc_brief,
         max_attempts=max_attempts,
+        extra_terms=extra_terms,
         split_after_attempts=split_after_attempts,
         _depth=_depth + 1,
     )
@@ -711,6 +736,7 @@ def _polish_chunk(
         continuity=tail_context,
         doc_brief=doc_brief,
         max_attempts=max_attempts,
+        extra_terms=extra_terms,
         split_after_attempts=split_after_attempts,
         _depth=_depth + 1,
     )
@@ -861,6 +887,14 @@ def run_job(*, bucket: str, prefix: str, job_id: str) -> None:
     if not isinstance(segments, list):
         raise ValueError("skeleton.json is not a list (or {segments: [...]})")
 
+    # Load optional termbook for per-job custom terminology
+    extra_terms = {}
+    termbook = try_download_json(storage_client, bucket=paths.bucket, blob_name=paths.termbook_json())
+    if termbook and isinstance(termbook, dict):
+        extra_terms = termbook.get("terms", {})
+        if extra_terms:
+            logger.info(f"📖 Loaded termbook with {len(extra_terms)} terms")
+
     target_language_name = _lang_name(target_language_code)
 
     vertexai.init(project=job.get("project_id") or "sermon-translator-system", location=config.GEMINI_LOCATION)
@@ -984,6 +1018,7 @@ def run_job(*, bucket: str, prefix: str, job_id: str) -> None:
                 doc_brief=doc_brief,
                 max_attempts=max_attempts,
                 split_after_attempts=split_after_attempts,
+                extra_terms=extra_terms,
             )
             for item in translated_chunk:
                 translated_map[str(item["id"])] = item["text"]
@@ -1081,8 +1116,13 @@ def run_job(*, bucket: str, prefix: str, job_id: str) -> None:
         translated_segments=review_segments,
         corrections=corrections,
     )
+    # Upload editor report immediately so it appears in dashboard during Polish phase
+    upload_json(storage_client, bucket=paths.bucket, blob_name=paths.editor_report_json(), payload=report or {})
+
     post_polish_segments = approved_segments
     polish_fixes = 0
+    polish_engine = "none"  # Track which engine was used
+    
     if polish_pass and polish_max_fixes > 0:
         _write_progress(
             storage_client,
@@ -1092,46 +1132,112 @@ def run_job(*, bucket: str, prefix: str, job_id: str) -> None:
             progress=70.0,
             meta={"polish_max_fixes": polish_max_fixes},
         )
-        polish_model = GenerativeModel(polish_model_name)
-        polish_prompt = _build_polish_prompt_v2(
-            source_segments=segments,
-            translated_segments=approved_segments,
-            lang_suffix=target_language_code.upper(),
-            max_fixes=polish_max_fixes,
-        )
+        
         polish_corrections: list[dict] = []
-        try:
-            # Use simple text generation (no JSON schema) for faster inference
-            # This mimics the Gem Chat experience which is 10x faster
-            polish_response = polish_model.generate_content(
-                polish_prompt,
-                generation_config=GenerationConfig(temperature=0.15),
-                safety_settings=SAFETY_SETTINGS,
-            )
-            polish_corrections = _parse_polish_response_v2(
-                getattr(polish_response, "text", "") or "",
-                valid_ids=set(int(seg.get("id")) for seg in approved_segments if seg.get("id")),
-            )
-        except Exception as exc:
-            logger.warning("   ⚠️ Senior polish failed: %s", exc)
-            polish_corrections = []
-
-        if polish_corrections:
-            post_polish_segments = _apply_editor_corrections(
-                source_segments=segments,
-                translated_segments=approved_segments,
-                corrections=polish_corrections,
-            )
-            polish_fixes = len(polish_corrections)
+        polish_rating = None
+        polish_patterns = []
+        
+        # PHASE 3: CLAUDE OPUS 4.5 WITH GRACEFUL FALLBACK
+        # If Claude is unavailable, we skip polish and use Gemini-reviewed output
+        # This ensures jobs complete even during Claude outages
+        logger.info(f"   🔍 DIAGNOSTIC: OMEGA_CLAUDE_POLISH={config.OMEGA_CLAUDE_POLISH}")
+        logger.info(f"   🔍 DIAGNOSTIC: ANTHROPIC_API_KEY present={bool(config.ANTHROPIC_API_KEY)}")
+        logger.info(f"   🔍 DIAGNOSTIC: OMEGA_CLAUDE_MODEL={config.OMEGA_CLAUDE_MODEL}")
+        
+        # Track polish results
+        polish_corrections = []
+        polish_rating = None
+        polish_patterns = []
+        polish_engine = "skipped"
+        polish_model = None
+        polish_fixes = 0
+        post_polish_segments = approved_segments  # Default to Gemini output
+        
+        # Attempt Claude polish if configured
+        claude_available = config.OMEGA_CLAUDE_POLISH and config.ANTHROPIC_API_KEY
+        
+        if not claude_available:
+            logger.warning("   ⚠️ Claude polish disabled or API key missing - using Gemini-reviewed output")
+            polish_engine = "gemini_only"
+        else:
+            # Import and verify Claude availability
+            try:
+                from providers.anthropic_claude import polish_with_claude, apply_claude_corrections, is_claude_available
+                
+                logger.info("   ✅ anthropic_claude module imported successfully")
+                
+                if not is_claude_available():
+                    logger.warning("   ⚠️ Claude unavailable (is_claude_available=False) - using Gemini-reviewed output")
+                    polish_engine = "claude_unavailable"
+                else:
+                    logger.info("   🧠 Using Claude Opus 4.5 for Phase 3 Polish")
+                    _write_progress(
+                        storage_client,
+                        paths=paths,
+                        stage="CLOUD_POLISHING",
+                        status="Claude Senior Polish Editor reviewing",
+                        progress=72.0,
+                    )
+                    
+                    # Get language info from profiles
+                    lang_info = profiles.LANGUAGES.get(target_language_code, {})
+                    
+                    # Build glossary from profiles
+                    glossary = {}
+                    profile_data = profiles.PROFILES.get(program_profile, {})
+                    if "golden_terms" in profile_data:
+                        glossary.update(profile_data["golden_terms"])
+                    # Add extra_terms if provided
+                    if extra_terms:
+                        glossary.update(extra_terms)
+                    
+                    logger.info(f"   📡 Calling Claude API with model={config.OMEGA_CLAUDE_MODEL}")
+                    claude_result = polish_with_claude(
+                        source_segments=segments,
+                        draft_segments=approved_segments,
+                        target_language_code=target_language_code,
+                        target_language_name=lang_info.get("name", target_language_code),
+                        bible_version=lang_info.get("bible", ""),
+                        god_address=lang_info.get("god_address", ""),
+                        program_profile=program_profile,
+                        glossary=glossary,
+                        max_fixes=polish_max_fixes,
+                    )
+                    
+                    polish_corrections = claude_result.get("corrections", [])
+                    polish_rating = claude_result.get("rating")
+                    polish_patterns = claude_result.get("patterns", [])
+                    polish_engine = "claude"
+                    polish_model = config.OMEGA_CLAUDE_MODEL
+                    
+                    logger.info(f"   ✅ Claude: {len(polish_corrections)} corrections, rating {polish_rating}/10")
+                    
+                    # Apply corrections from Claude
+                    if polish_corrections:
+                        post_polish_segments, polish_fixes = apply_claude_corrections(
+                            approved_segments,
+                            polish_corrections,
+                            min_confidence=0.7,
+                        )
+                    
+            except Exception as exc:
+                # GRACEFUL FALLBACK: Log error but continue with Gemini output
+                logger.warning(f"   ⚠️ Claude polish failed, using Gemini-reviewed output: {exc}")
+                polish_engine = "claude_failed"
+                polish_patterns = [f"Claude error: {str(exc)[:100]}"]
+    
     approved_payload = {
         "segments": post_polish_segments,
         "meta": {
             "editor_model": editor_model_name,
-            "polish_model": polish_model_name if polish_pass else None,
+            "polish_model": polish_model_name if polish_engine == "gemini" else config.OMEGA_CLAUDE_MODEL,
+            "polish_engine": polish_engine,
             "polish_pass": polish_pass,
             "polish_mode": "global" if polish_pass else None,
             "polish_fixes": polish_fixes,
             "polish_max_fixes": polish_max_fixes if polish_pass else None,
+            "polish_rating": polish_rating if polish_engine == "claude" else None,
+            "polish_patterns": polish_patterns if polish_engine == "claude" else None,
             "rating": report.get("rating") if isinstance(report, dict) else None,
             "quality_tier": report.get("quality_tier") if isinstance(report, dict) else None,
             "generated_at": utc_iso_now(),
@@ -1449,6 +1555,8 @@ def _parse_editor_response(text: str) -> tuple[list[dict], dict]:
     try:
         result = json.loads(cleaned)
     except Exception as exc:
+        logger.error(f"❌ JSON PARSE FAILED. Raw response start: {cleaned[:1000]}")
+        logger.error(f"❌ JSON PARSE FAILED. Raw response end: {cleaned[-1000:]}")
         raise ValueError(f"Failed to parse editor JSON: {exc}") from exc
 
     if not isinstance(result, dict):
@@ -1492,6 +1600,7 @@ def _apply_editor_corrections(
             "start": seg.get("start"),
             "end": seg.get("end"),
             "source_text": seg.get("text"),
+            "words": seg.get("words"),  # Preserve word-level timing for Finalizer
         }
 
     final_segments: list[dict] = []

@@ -22,6 +22,7 @@ from google.cloud import storage
 
 # Import Workers
 from workers import transcriber, translator, editor, finalizer, publisher
+from workers import audio_clipper, review_notifier
 
 # Configure Logging
 logging.basicConfig(
@@ -40,7 +41,39 @@ active_tasks = set()
 # Failure tracking for backoff
 failure_counts = {}
 
+# Thread lock for concurrent access to active_tasks and failure_counts
+import threading
+_task_lock = threading.Lock()
+
 MAX_TASK_FAILURES = 5
+
+# --- Thread-safe helpers for active_tasks ---
+def _is_task_active(stem: str) -> bool:
+    """Thread-safe check if a task is currently active."""
+    with _task_lock:
+        return stem in active_tasks
+
+def _add_task(stem: str) -> bool:
+    """Thread-safe add to active_tasks. Returns True if added, False if already present."""
+    with _task_lock:
+        if stem in active_tasks:
+            return False
+        active_tasks.add(stem)
+        return True
+
+def _remove_task(stem: str):
+    """Thread-safe remove from active_tasks."""
+    with _task_lock:
+        active_tasks.discard(stem)
+
+def _is_in_cooldown(stem: str) -> bool:
+    """Thread-safe cooldown check."""
+    with _task_lock:
+        if stem not in failure_counts:
+            return False
+        count, last_fail = failure_counts[stem]
+        backoff = min(2 ** count, 60)
+        return time.time() - last_fail < backoff
 
 def _safe_float_env(name: str, default: float) -> float:
     try:
@@ -49,6 +82,9 @@ def _safe_float_env(name: str, default: float) -> float:
         return default
 
 INGEST_STALL_SECONDS = _safe_float_env("OMEGA_INGEST_STALL_SECONDS", 1800.0)
+INGEST_STABILITY_CHECKS = int(os.environ.get("OMEGA_INGEST_STABILITY_CHECKS", "3") or 3)
+INGEST_STABILITY_DELAY = _safe_float_env("OMEGA_INGEST_STABILITY_DELAY", 1.0)
+INGEST_MIN_AGE_SECONDS = _safe_float_env("OMEGA_INGEST_MIN_AGE", 3.0)
 RESTART_FLAG = config.BASE_DIR / "heartbeats" / "omega_manager.restart"
 RESTART_FORCE_FLAG = config.BASE_DIR / "heartbeats" / "omega_manager.restart.force"
 
@@ -96,7 +132,11 @@ def _parse_iso(value: str) -> Optional[datetime]:
     if not value:
         return None
     try:
-        return datetime.fromisoformat(value)
+        dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        # Convert to naive UTC for comparison with datetime.now()
+        if dt.tzinfo is not None:
+            dt = dt.replace(tzinfo=None)
+        return dt
     except Exception:
         return None
 
@@ -148,21 +188,24 @@ def _find_vault_video(stem: str) -> Optional[Path]:
             return candidate
     return None
 
-def _run_ingest_recovery(stem: str, video_path: Optional[Path]) -> None:
-    omega_db.update(
-        stem,
-        stage="INGEST",
-        status="Recovery: re-running transcription",
-        progress=12.0,
-    )
-    if video_path and video_path.exists():
-        transcriber.run(video_path)
-    else:
-        audio_path = config.VAULT_DIR / "Audio" / f"{stem}.wav"
-        if not audio_path.exists():
-            raise FileNotFoundError(f"Recovery failed: audio missing for {stem}")
-        transcriber.transcribe(audio_path)
-    omega_db.update(stem, stage="TRANSCRIBED", status="Ready for Translation", progress=30.0)
+
+def _is_stable_file(path: Path) -> bool:
+    try:
+        stat = path.stat()
+    except FileNotFoundError:
+        return False
+    if INGEST_MIN_AGE_SECONDS and (time.time() - stat.st_mtime) < INGEST_MIN_AGE_SECONDS:
+        return False
+    size = stat.st_size
+    checks = max(1, int(INGEST_STABILITY_CHECKS))
+    for _ in range(checks - 1):
+        time.sleep(max(0.1, INGEST_STABILITY_DELAY))
+        try:
+            if path.stat().st_size != size:
+                return False
+        except FileNotFoundError:
+            return False
+    return True
 
 def _cloud_job_paths(meta: dict) -> tuple[Optional[GcsJobPaths], Optional[str], Optional[str]]:
     if not isinstance(meta, dict):
@@ -173,6 +216,109 @@ def _cloud_job_paths(meta: dict) -> tuple[Optional[GcsJobPaths], Optional[str], 
     bucket_name = str(meta.get("cloud_bucket") or config.OMEGA_JOBS_BUCKET).strip()
     prefix = str(meta.get("cloud_prefix") or config.OMEGA_JOBS_PREFIX).strip()
     return GcsJobPaths(bucket=bucket_name, prefix=prefix, job_id=str(cloud_job_id)), bucket_name, prefix
+
+def _trigger_review_portal(stem: str, meta: dict, job: dict) -> bool:
+    """
+    Trigger human review portal workflow if enabled.
+    
+    Generates audio clips, uploads to GCS, and sends email notification.
+    Returns True if review was triggered (job should wait for approval).
+    """
+    # Check if review portal is enabled
+    if not _is_truthy(os.environ.get("OMEGA_REVIEW_PORTAL_ENABLED", "0")):
+        return False
+    
+    # Check if this job requires human review (from source path)
+    source_path = str(meta.get("source_path") or "").lower()
+    if "/02_human_review/" not in source_path:
+        return False
+    
+    # Already in review?
+    if meta.get("review_notification_sent"):
+        return True  # Wait for approval
+    
+    logger.info(f"🔍 Triggering human review for: {stem}")
+    
+    # Get necessary paths (prefer stored vault path / original filename)
+    video_path = None
+    vault_path = meta.get("vault_path") if isinstance(meta, dict) else None
+    if vault_path:
+        candidate = Path(str(vault_path))
+        if candidate.exists():
+            video_path = candidate
+    if video_path is None:
+        original_filename = meta.get("original_filename") if isinstance(meta, dict) else None
+        if original_filename:
+            candidate = config.VAULT_VIDEOS / original_filename
+            if candidate.exists():
+                video_path = candidate
+    if video_path is None:
+        original_stem = meta.get("original_stem") if isinstance(meta, dict) else None
+        video_path = _find_vault_video(original_stem or stem)
+    skeleton_path = config.VAULT_DATA / f"{stem}_SKELETON.json"
+    if not skeleton_path.exists():
+        skeleton_path = config.VAULT_DATA / f"{stem}_SKELETON_DONE.json"
+    
+    # Get cloud job info
+    paths, bucket_name, prefix = _cloud_job_paths(meta)
+    cloud_job_id = meta.get("cloud_job_id") or meta.get("gcs_job_id")
+    
+    if not all([video_path, skeleton_path.exists(), cloud_job_id]):
+        logger.warning(f"   ⚠️ Missing files for review: video={video_path}, skeleton={skeleton_path.exists()}")
+        return False
+    
+    try:
+        # Generate and upload audio clips
+        audio_clipper.prepare_review_clips(
+            video_path=video_path,
+            skeleton_path=skeleton_path,
+            bucket_name=bucket_name,
+            job_prefix=prefix,
+            job_id=cloud_job_id
+        )
+        
+        # Get reviewer email
+        target_lang = str(job.get("target_language") or meta.get("target_language") or "is").upper()
+        reviewer_email = review_notifier.get_reviewer_for_language(target_lang)
+        
+        if reviewer_email:
+            # Get quality rating from editor report
+            report = job.get("editor_report")
+            quality_rating = None
+            if report:
+                try:
+                    report_data = json.loads(report) if isinstance(report, str) else report
+                    quality_rating = report_data.get("rating")
+                except Exception:
+                    pass
+            
+            # Send notification
+            review_notifier.send_review_notification(
+                job_id=cloud_job_id,
+                program_name=stem,
+                target_language=target_lang,
+                reviewer_email=reviewer_email,
+                quality_rating=quality_rating
+            )
+        
+        # Update job status
+        omega_db.update(
+            stem,
+            status="Awaiting Human Review",
+            meta={
+                "review_notification_sent": True,
+                "review_portal_job_id": cloud_job_id,
+                "review_requested_at": datetime.now().isoformat(),
+            }
+        )
+        
+        logger.info(f"   ✅ Review portal triggered for {stem}")
+        return True
+        
+    except Exception as e:
+        logger.error(f"   ❌ Failed to trigger review portal: {e}")
+        return False
+
 
 def _build_review_payload(
     *,
@@ -273,15 +419,17 @@ def task_wrapper(stem, task_name, func, *args, **kwargs):
         func(*args, **kwargs)
         
         # Success: Reset failure count
-        if stem in failure_counts:
-            del failure_counts[stem]
+        with _task_lock:
+            if stem in failure_counts:
+                del failure_counts[stem]
             
     except Exception as e:
         logger.error(f"❌ Async Task Failed ({task_name}): {e}")
         
         # Increment failure count
-        count = failure_counts.get(stem, (0, 0))[0] + 1
-        failure_counts[stem] = (count, time.time())
+        with _task_lock:
+            count = failure_counts.get(stem, (0, 0))[0] + 1
+            failure_counts[stem] = (count, time.time())
         
         # Calculate backoff (2^count, max 60s)
         backoff = min(2 ** count, 60)
@@ -298,7 +446,6 @@ def task_wrapper(stem, task_name, func, *args, **kwargs):
                 progress=0,
                 meta={
                     "halted": True,
-                    "halted_at": datetime.now().isoformat(),
                     "halt_reason": short_error,
                     "last_error": short_error,
                     "failed_at": datetime.now().isoformat(),
@@ -324,14 +471,13 @@ def task_wrapper(stem, task_name, func, *args, **kwargs):
             
     finally:
         logger.info(f"🏁 Finished Async Task: {task_name} for {stem}")
-        if stem in active_tasks:
-            active_tasks.remove(stem)
+        _remove_task(stem)
 
 def ingest_new_files(executor):
     """
     Scans INBOX for new video files.
     """
-    EXTENSIONS = {".mp3", ".wav", ".mp4", ".m4a", ".mov", ".mkv", ".mpg", ".mpeg", ".moc"}
+    EXTENSIONS = {".mp3", ".wav", ".mp4", ".m4a", ".mov", ".mkv", ".mpg", ".mpeg", ".moc", ".mxf"}
     
     WATCH_MAP = {
         # Auto Pilot
@@ -355,34 +501,60 @@ def ingest_new_files(executor):
             if file_path.name.startswith("."): continue
             if file_path.suffix.lower() in EXTENSIONS:
                 # Stability Check
-                try:
-                    initial_size = file_path.stat().st_size
-                    time.sleep(1)
-                    if file_path.stat().st_size != initial_size: continue
-                except FileNotFoundError: continue
+                if not _is_stable_file(file_path):
+                    continue
 
                 stem = file_path.stem
-                if stem in active_tasks:
+                if _is_task_active(stem):
                     logger.debug(f"⚠️ Skipping {stem}: Already active")
                     continue 
 
                 logger.info(f"📥 Found Candidate: {file_path.name} in {folder}")
                 
-                # Mark as active
-                active_tasks.add(stem)
+                # Mark as active (thread-safe)
+                if not _add_task(stem):
+                    continue  # Already added by another thread
                 
                 # Submit to ThreadPool
                 executor.submit(task_wrapper, stem, "Ingest", _run_ingest, file_path, mode, style)
 
+def _detect_client(filename: str) -> str:
+    """Detect client from filename using CLIENT_PATTERNS from config."""
+    name_lower = filename.lower()
+    for pattern, client_name in getattr(config, "CLIENT_PATTERNS", {}).items():
+        if pattern in name_lower:
+            return client_name
+    return "unknown"
+
+
 def _run_ingest(file_path, mode, style):
-    stem = file_path.stem
+    original_stem = file_path.stem
+    # Generate unique job ID using same pattern as cloud pipeline
+    # Format: {slugified_stem}-{timestamp} e.g., "episode1-20241228T121500Z"
+    job_id = new_job_id(original_stem)
+    
+    # Auto-detect client from filename (original name)
+    client = _detect_client(original_stem)
+    
+    # Calculate due date based on client defaults
+    import datetime
+    client_defaults = getattr(config, "CLIENT_DEFAULTS", {})
+    client_config = client_defaults.get(client, client_defaults.get("unknown", {}))
+    due_days = client_config.get("due_date_days", 7)
+    due_date = (datetime.datetime.now() + datetime.timedelta(days=due_days)).strftime("%Y-%m-%d")
+    
     try:
         source_path = str(file_path)
         review_required = (mode in {"REVIEW", "REMOTE_REVIEW"}) or ("/02_human_review/" in source_path.lower())
         remote_review_required = (mode == "REMOTE_REVIEW") or ("/03_remote_review/" in source_path.lower())
-        # 1. Init DB
+        
+        vault_path = str(config.VAULT_VIDEOS / file_path.name)
+        
+        # 1. Init DB with Job ID as key (legacy jobs table)
         meta = {
             "original_filename": file_path.name,
+            "original_stem": original_stem,  # For display purposes
+            "vault_path": vault_path,
             "mode": "REVIEW" if review_required else "AUTO",
             "style": style,
             "source_path": source_path,
@@ -390,16 +562,81 @@ def _run_ingest(file_path, mode, style):
             "remote_review_required": remote_review_required,
             "ingest_time": publisher.iso_now()
         }
-        omega_db.update(stem, stage="INGEST", status="Processing Audio", progress=10.0, meta=meta, subtitle_style=style)
         
-        # 2. Run Transcriber
-        skeleton_path = transcriber.run(file_path)
+        omega_db.update(job_id, stage="INGEST", status="Processing Audio", progress=10.0, meta=meta, subtitle_style=style, client=client, due_date=due_date)
         
-        # 3. Update DB
-        omega_db.update(stem, stage="TRANSCRIBED", status="Ready for Translation", progress=30.0)
+        # 2. Run Transcriber with Job ID (returns video_path, audio_path, thumbnail_path)
+        skeleton_path = transcriber.run(file_path, job_id=job_id)
+        
+        # Get thumbnail path (generated during ingest)
+        thumbnail_dir = config.VAULT_DIR / "Thumbnails"
+        thumbnail_path = thumbnail_dir / f"{file_path.stem}.jpg"
+        
+        # Get video duration
+        duration = transcriber.get_audio_duration(config.VAULT_DIR / "Audio" / f"{file_path.stem}.wav")
+        
+        # 3. Create Program record (if not exists)
+        existing_program = omega_db.get_program_by_video(vault_path)
+        if existing_program:
+            program_id = existing_program['id']
+            logger.info(f"📚 Using existing program: {program_id}")
+        else:
+            program_id = omega_db.create_program(
+                title=original_stem,
+                original_filename=file_path.name,
+                video_path=vault_path,
+                thumbnail_path=str(thumbnail_path) if thumbnail_path and thumbnail_path.exists() else None,
+                duration_seconds=duration,
+                client=client,
+                due_date=due_date,
+                default_style=style,
+                meta={
+                    "ingest_time": publisher.iso_now(),
+                    "review_required": review_required,
+                    "remote_review_required": remote_review_required,
+                }
+            )
+            logger.info(f"📚 Created program: {program_id}")
+        
+        # 4. Create Track record (links to legacy job)
+        target_lang = getattr(config, "OMEGA_TARGET_LANGUAGE", "is")
+        track_id = omega_db.create_track(
+            program_id=program_id,
+            type='subtitle',
+            language_code=target_lang,
+            stage='TRANSCRIBED',
+            status='Ready for Translation',
+            job_id=job_id,
+            meta={
+                "skeleton_path": str(skeleton_path) if skeleton_path else None,
+            }
+        )
+        logger.info(f"🎬 Created track: {track_id} ({target_lang} subtitle)")
+        
+        # 5. Update job meta with program/track IDs
+        omega_db.update(job_id, stage="TRANSCRIBED", status="Ready for Translation", progress=30.0, 
+                       meta={"program_id": program_id, "track_id": track_id})
         
     except Exception as e:
         raise e # Handled by wrapper
+
+def _run_ingest_recovery(stem: str, video_path: Path):
+    """
+    Recovers a stalled ingest job where the video is already in the Vault.
+    Re-runs transcription ensuring Job ID consistency.
+    """
+    logger.info(f"🔄 Recovering Ingest for {stem}")
+    try:
+        # Re-run transcriber
+        # input: video_path (in Vault)
+        # job_id: stem (Critical for file naming)
+        transcriber.run(video_path, job_id=stem)
+        
+        omega_db.update(stem, stage="TRANSCRIBED", status="Ready for Translation", progress=30.0)
+    except Exception as e:
+        logger.error(f"❌ Recovery failed for {stem}: {e}")
+        omega_db.update(stem, stage="FAILED", status=f"Recovery Failed: {str(e)}", progress=0.0)
+        raise e
 
 def process_jobs(executor):
     """
@@ -430,7 +667,8 @@ def process_jobs(executor):
     def _autocorrect_completed(stem: str, job: dict) -> bool:
         final_path = _final_output_path(job)
         if final_path and final_path.exists():
-            if (job.get("stage") or "").upper() != "COMPLETED":
+            stage_upper = (job.get("stage") or "").upper()
+            if stage_upper not in {"COMPLETED", "DELIVERED"}:
                 logger.info(f"✅ Auto-correcting {stem}: output exists at {final_path}")
                 omega_db.update(
                     stem,
@@ -522,14 +760,13 @@ def process_jobs(executor):
         )
         _request_manager_restart(force=True)
 
-    # 0. Recover stalled ingest jobs (video already moved to Vault)
+    # 1. Recover stalled ingest jobs (video already moved to Vault)
     now = datetime.now()
-    for stem, job in jobs_by_stem.items():
-        if not stem:
+    for job in jobs:
+        stem = job.get("file_stem")
+        if not stem or stem in active_tasks:
             continue
         if (job.get("stage") or "").upper() != "INGEST":
-            continue
-        if stem in active_tasks:
             continue
         if is_in_cooldown(stem):
             continue
@@ -537,9 +774,7 @@ def process_jobs(executor):
         if meta.get("halted"):
             continue
         updated_at = _parse_iso(job.get("updated_at"))
-        if not updated_at:
-            continue
-        if (now - updated_at).total_seconds() < INGEST_STALL_SECONDS:
+        if not updated_at or (now - updated_at).total_seconds() < INGEST_STALL_SECONDS:
             continue
 
         skel_path = config.VAULT_DATA / f"{stem}_SKELETON.json"
@@ -547,26 +782,58 @@ def process_jobs(executor):
             logger.warning("⚠️ Ingest stalled for %s but skeleton exists. Advancing stage.", stem)
             omega_db.update(stem, stage="TRANSCRIBED", status="Ready for Translation", progress=30.0)
             continue
-
-        video_path = _find_vault_video(stem)
-        logger.warning("⚠️ Ingest stalled for %s. Re-running transcription from Vault.", stem)
-        active_tasks.add(stem)
-        executor.submit(task_wrapper, stem, "IngestRecovery", _run_ingest_recovery, stem, video_path)
-
-    # 1. TRANSCRIBED -> TRANSLATING
-    for skel in config.VAULT_DATA.glob("*_SKELETON.json"):
-        if _is_hidden_artifact(skel):
-            continue
-        stem = skel.stem.replace("_SKELETON", "")
-        if stem in active_tasks: continue
-        if is_in_cooldown(stem): continue
         
-        job = jobs_by_stem.get(stem) or omega_db.get_job(stem)
-        if not job: continue
+        # Check if video already in vault (prefer stored vault path / original filename)
+        video_vault = None
+        vault_path = meta.get("vault_path")
+        if vault_path:
+            candidate = Path(str(vault_path))
+            if candidate.exists():
+                video_vault = candidate
+        if video_vault is None:
+            original_filename = meta.get("original_filename")
+            if original_filename:
+                candidate = config.VAULT_VIDEOS / original_filename
+                if candidate.exists():
+                    video_vault = candidate
+        if video_vault is None:
+            original_stem = meta.get("original_stem")
+            if original_stem:
+                candidate = _find_vault_video(original_stem)
+                if candidate and candidate.exists():
+                    video_vault = candidate
 
+        if video_vault and video_vault.exists():
+            logger.warning("⚠️ Ingest stalled for %s but video exists in Vault. Retrying ingest.", stem)
+            _add_task(stem)
+            executor.submit(task_wrapper, stem, "IngestRecovery", _run_ingest_recovery, stem, video_vault)
+            continue
+
+    # 2. TRANSCRIBED -> TRANSLATING (submit to Cloud Run or local worker)
+    # Calculate initial translating count for concurrency gate
+    MAX_CONCURRENT_TRANSLATIONS = int(os.environ.get("OMEGA_MAX_CONCURRENT_TRANSLATIONS", "2"))
+    translating_stages = {"TRANSLATING", "TRANSLATING_CLOUD_SUBMITTED", "CLOUD_TRANSLATING", "CLOUD_REVIEWING"}
+    currently_translating = sum(
+        1 for _, j in jobs_by_stem.items()
+        if (j.get("stage") or "").upper() in translating_stages
+    )
+
+    # 1. TRANSCRIBED -> TRANSLATING (submit to Cloud Run or local worker)
+    for job in jobs:
+        stem = job.get("file_stem")
+        if not stem or stem in active_tasks:
+            continue
+        if is_in_cooldown(stem):
+            continue
         meta = _job_meta(job)
         if meta.get("halted"):
             continue
+        
+        # Skeleton check
+        skel = config.VAULT_DATA / f"{stem}_SKELETON.json"
+        if not skel.exists():
+            continue
+
         if _autocorrect_completed(stem, job):
             # Stop re-triggering from stale skeletons.
             done_skel = config.VAULT_DATA / f"{stem}_SKELETON_DONE.json"
@@ -595,7 +862,15 @@ def process_jobs(executor):
         
         target_language = job.get("target_language", "is")
         
-        active_tasks.add(stem)
+        # Concurrency gate: max 2 translations at a time to prevent API quota issues
+        if currently_translating >= MAX_CONCURRENT_TRANSLATIONS:
+            # Skip this job for now; it will be picked up in the next cycle
+            logger.debug(f"⏳ Waiting to translate {stem}: {currently_translating} jobs already translating (max {MAX_CONCURRENT_TRANSLATIONS})")
+            continue
+        
+        _add_task(stem)
+        currently_translating += 1 # Local increment for this loop
+        
         if _cloud_pipeline_enabled():
             executor.submit(task_wrapper, stem, "Translate (Cloud)", _run_translate_cloud, skel, stem, target_language)
         else:
@@ -764,6 +1039,12 @@ def process_jobs(executor):
                         },
                     )
                     logger.info("✅ Cloud approved downloaded: %s", local_approved.name)
+                    
+                    # Check if human review is required
+                    if _trigger_review_portal(stem, meta, job_entry):
+                        # Job is waiting for human review - don't proceed to finalize yet
+                        continue
+                        
                 except Exception as e:
                     logger.error("❌ Failed to download cloud approval for %s: %s", stem, e)
 
@@ -793,6 +1074,60 @@ def process_jobs(executor):
                     logger.info("✅ Cloud editor report backfilled: %s", paths.editor_report_json())
                 except Exception as e:
                     logger.error("❌ Failed to backfill cloud editor report for %s: %s", stem, e)
+
+            # 1c. HUMAN REVIEW PORTAL -> Check for reviewed translations
+            for job_entry in jobs:
+                stem = job_entry.get("file_stem")
+                if not stem:
+                    continue
+                meta = _job_meta(job_entry)
+                
+                # Only check jobs waiting for human review
+                if not meta.get("review_notification_sent"):
+                    continue
+                if meta.get("human_review_complete"):
+                    continue
+                
+                # Check for reviewed.json in GCS
+                cloud_job_id = meta.get("cloud_job_id") or meta.get("review_portal_job_id")
+                if not cloud_job_id:
+                    continue
+                    
+                bucket_name = str(meta.get("cloud_bucket") or config.OMEGA_JOBS_BUCKET).strip()
+                prefix = str(meta.get("cloud_prefix") or config.OMEGA_JOBS_PREFIX).strip()
+                reviewed_blob = f"{prefix}/{cloud_job_id}/{cloud_job_id}_REVIEWED.json"
+                
+                try:
+                    if not blob_exists(storage_client, bucket_name, reviewed_blob):
+                        continue
+                    
+                    # Download the reviewed translation
+                    reviewed_payload = download_json(
+                        storage_client,
+                        bucket=bucket_name,
+                        blob_name=reviewed_blob,
+                    )
+                    
+                    # Save to local approved location
+                    local_approved = config.TRANSLATED_DONE_DIR / f"{stem}_APPROVED.json"
+                    with open(local_approved, "w", encoding="utf-8") as f:
+                        json.dump(reviewed_payload.get("segments", reviewed_payload), f, indent=2, ensure_ascii=False)
+                    
+                    omega_db.update(
+                        stem,
+                        stage="REVIEWED",
+                        status="Human Review Complete",
+                        progress=72.0,
+                        meta={
+                            "human_review_complete": True,
+                            "human_review_completed_at": datetime.now().isoformat(),
+                            "human_reviewer": reviewed_payload.get("approved_by", "Reviewer"),
+                        },
+                    )
+                    logger.info("✅ Human review complete: %s (by %s)", stem, reviewed_payload.get("approved_by", "Reviewer"))
+                    
+                except Exception as e:
+                    logger.error("❌ Failed to check human review for %s: %s", stem, e)
 
     # 2. TRANSLATED -> REVIEWING (Editor)
     for trans in config.EDITOR_DIR.glob("*.json"):
@@ -829,7 +1164,7 @@ def process_jobs(executor):
         if stage not in {"TRANSLATED", "REVIEWING"}:
             continue
         
-        active_tasks.add(stem)
+        _add_task(stem)
         executor.submit(task_wrapper, stem, "Review", _run_review, trans, stem)
 
     # 3. REVIEWED -> FINALIZING (Finalizer)
@@ -937,18 +1272,50 @@ def process_jobs(executor):
                         )
                     continue
 
+                # Check for review completion - try multiple patterns
+                # Pattern 1: review_corrections.json (legacy)
+                # Pattern 2: {job_id}_REVIEWED.json (review portal)
+                # Pattern 3: review_status.json (approval status)
+                review_blob_name = None
                 if blob_exists(review_storage_client, bucket_name, paths.review_corrections_json()):
+                    review_blob_name = paths.review_corrections_json()
+                elif blob_exists(review_storage_client, bucket_name, paths.reviewed_json()):
+                    review_blob_name = paths.reviewed_json()
+                elif blob_exists(review_storage_client, bucket_name, paths.review_status_json()):
+                    # If only status exists, check if approved
+                    try:
+                        status_data = download_json(review_storage_client, bucket=bucket_name, blob_name=paths.review_status_json())
+                        if status_data.get("status") == "approved":
+                            review_blob_name = paths.reviewed_json()  # Try to get segments from _REVIEWED.json
+                    except Exception:
+                        pass
+                
+                if review_blob_name and blob_exists(review_storage_client, bucket_name, review_blob_name):
                     try:
                         corrections_payload = download_json(
                             review_storage_client,
                             bucket=bucket_name,
-                            blob_name=paths.review_corrections_json(),
+                            blob_name=review_blob_name,
                         )
-                        corrections = corrections_payload.get("corrections") if isinstance(corrections_payload, dict) else []
-                        applied, comment_count = _apply_remote_corrections(
-                            approved_path=approved,
-                            corrections=corrections or [],
-                        )
+                        # Handle both formats: {"corrections": [...]} or {"segments": [...]}
+                        if "corrections" in corrections_payload:
+                            corrections = corrections_payload.get("corrections", [])
+                            applied, comment_count = _apply_remote_corrections(
+                                approved_path=approved,
+                                corrections=corrections or [],
+                            )
+                        elif "segments" in corrections_payload:
+                            # _REVIEWED.json from portal has full segments
+                            # Replace entire approved file with reviewed segments
+                            with open(approved, 'w', encoding='utf-8') as f:
+                                json.dump(corrections_payload, f, indent=2, ensure_ascii=False)
+                            applied = len(corrections_payload.get("segments", []))
+                            comment_count = 0
+                            logger.info(f"✅ Applied reviewed segments from portal for {stem}")
+                        else:
+                            corrections = []
+                            applied, comment_count = 0, 0
+                            
                         omega_db.update(
                             stem,
                             status="Remote Review Applied",
@@ -974,11 +1341,18 @@ def process_jobs(executor):
         if (config.SRT_DIR / f"{stem}.srt").exists(): continue
         if (config.VIDEO_DIR / f"{stem}_SUBBED.mp4").exists(): continue
             
-        active_tasks.add(stem)
+        _add_task(stem)
         executor.submit(task_wrapper, stem, "Finalize", _run_finalize, approved, stem)
 
     # 4. FINALIZED -> BURNING (Publisher)
     # 4. FINALIZED -> BURNING (Publisher)
+    # Calculate initial burning count for concurrency gate (M2 Max optimized)
+    MAX_CONCURRENT_BURNS = int(os.environ.get("OMEGA_MAX_CONCURRENT_BURNS", "2"))
+    currently_burning = sum(
+        1 for _, j in jobs_by_stem.items()
+        if (j.get("stage") or "").upper() == "BURNING"
+    )
+
     for srt in config.SRT_DIR.glob("*.srt"):
         if _is_hidden_artifact(srt):
             continue
@@ -1050,9 +1424,15 @@ def process_jobs(executor):
                 logger.info(f"🛑 Pre-Burn Gate: Stopping {stem} (Waiting for Approval)")
             continue
 
+        # Concurrency gate: max 2 burns at a time to prevent hardware contention (M2 Max)
+        if currently_burning >= MAX_CONCURRENT_BURNS:
+             logger.debug(f"⏳ Waiting to burn {stem}: {currently_burning} jobs already burning (max {MAX_CONCURRENT_BURNS})")
+             continue
+
         logger.info(f"🔍 Found candidate for burning: {stem}")
+        currently_burning += 1 # Local increment
              
-        active_tasks.add(stem)
+        _add_task(stem)
         executor.submit(task_wrapper, stem, "Burn", _run_burn, srt, stem)
 
 def _run_translate(skel, stem, target_language):
@@ -1086,7 +1466,7 @@ def _run_translate_cloud(skel, stem, target_language):
 
     bucket_name = config.OMEGA_JOBS_BUCKET
     prefix = config.OMEGA_JOBS_PREFIX
-    job_id = new_job_id(stem)
+    job_id = stem
     paths = GcsJobPaths(bucket=bucket_name, prefix=prefix, job_id=job_id)
 
     storage_client = storage.Client()
@@ -1101,8 +1481,9 @@ def _run_translate_cloud(skel, stem, target_language):
     music_detect = _is_truthy(getattr(config, "OMEGA_CLOUD_MUSIC_DETECT", True))
 
     job_payload = {
-        "project_id": "sermon-translator-system",
+        "project_id": config.OMEGA_CLOUD_PROJECT,
         "stem": stem,
+        "job_id": stem,
         "target_language_code": str(target_language or "is").strip().lower() or "is",
         "program_profile": program_profile,
         "translator_model": config.MODEL_TRANSLATOR,
@@ -1212,6 +1593,9 @@ def _run_finalize(approved, stem):
     logger.info(f"🎬 Finalizing: {stem}")
     omega_db.update(stem, stage="FINALIZING", status="Finalizing", progress=80.0)
     
+    # QA constant
+    IDEAL_CPS = 14.0
+    
     job = omega_db.get_job(stem)
     target_language = job.get("target_language", "is") if job else "is"
     
@@ -1220,23 +1604,34 @@ def _run_finalize(approved, stem):
 
 def _run_burn(srt, stem):
     logger.info(f"🔥 Burning: {stem}")
-    omega_db.update(stem, stage="BURNING", status="Burning", progress=95.0)
+    omega_db.update(stem, stage="BURNING", status="Burning", progress=95.0, meta={"burn_started_at": datetime.now().isoformat()})
     
     job = omega_db.get_job(stem)
     subtitle_style = job.get("subtitle_style", "Classic") if job else "Classic"
+    delivery_profile = job.get("delivery_profile") if job else None  # Read from job settings
     
-    original_filename = job.get("meta", {}).get("original_filename") if job else None
-    if not original_filename:
-        raise ValueError(f"Original filename not found for {stem}")
-    
-    video_path = config.VAULT_VIDEOS / original_filename
-    # Fallback search if not in VAULT_DATA
-    if not video_path.exists():
-         # Try INBOX or other locations?
-         # For now, assume VAULT_DATA is correct as per transcriber logic
-         pass
+    meta = job.get("meta", {}) if job else {}
+    video_path = None
+    vault_path = meta.get("vault_path")
+    if vault_path:
+        candidate = Path(str(vault_path))
+        if candidate.exists():
+            video_path = candidate
+    if video_path is None:
+        original_filename = meta.get("original_filename")
+        if original_filename:
+            candidate = config.VAULT_VIDEOS / original_filename
+            if candidate.exists():
+                video_path = candidate
 
-    output_video = publisher.publish(video_path, srt, subtitle_style=subtitle_style)
+    if video_path is None:
+        original_stem = meta.get("original_stem")
+        video_path = _find_vault_video(original_stem or stem)
+
+    if video_path is None:
+        raise FileNotFoundError(f"Video not found for {stem}")
+
+    output_video = publisher.publish(video_path, srt, subtitle_style=subtitle_style, delivery_profile=delivery_profile)
     omega_db.update(
         stem,
         stage="COMPLETED",
@@ -1278,8 +1673,9 @@ def main():
         logger.info("🧩 Cloud pipeline disabled (set OMEGA_CLOUD_PIPELINE=1 to enable).")
     
     # Initialize ThreadPool
-    # 4 workers allows for: 1 Ingest + 1 Transcribe + 1 Translate + 1 Burn simultaneously
-    with ThreadPoolExecutor(max_workers=4) as executor:
+    # 22 workers allows for full concurrency of 20 client jobs + 2 overhead
+    # Most steps are I/O bound (Cloud API), so high thread count is safe.
+    with ThreadPoolExecutor(max_workers=22) as executor:
         while True:
             try:
                 system_health.update_heartbeat("omega_manager")
@@ -1304,6 +1700,15 @@ def main():
                 if not config.critical_paths_ready(require_write=True):
                     logger.error("❌ Critical paths not writable/ready (external drive unmounted or permissions). Pausing.")
                     time.sleep(10)
+                    continue
+                
+                # Check disk space before processing (warn if low)
+                disk_ok, disk_gb = config.disk_space_available(min_gb=20.0)
+                if not disk_ok:
+                    logger.warning(f"⚠️ Low disk space: {disk_gb:.1f}GB available (need 20GB+). Pausing ingestion.")
+                    # Still process existing jobs but don't ingest new ones
+                    process_jobs(executor)
+                    time.sleep(30)
                     continue
                 
                 ingest_new_files(executor)

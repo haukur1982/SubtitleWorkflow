@@ -36,6 +36,7 @@ RUN pip install --no-cache-dir \
     pyannote.audio==3.3.2 \
     nltk \
     transformers \
+    matplotlib \
     google-cloud-storage>=2.10.0
 
 # Pre-download Whisper model

@@ -1,0 +1,2487 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Omega Compressor</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg-app: #0f0f0f;
+            --bg-panel: #1a1a1a;
+            --border: #333333;
+            --text-main: #ffffff;
+            --text-dim: #a3a3a3;
+            --accent: #3b82f6;
+            --success: #22c55e;
+            --warning: #eab308;
+            --danger: #ef4444;
+        }
+
+        body {
+            background-color: var(--bg-app);
+            color: var(--text-main);
+            font-family: 'Inter', sans-serif;
+            height: 100vh;
+            overflow: hidden;
+            font-size: 13px;
+        }
+
+        .panel {
+            background-color: var(--bg-panel);
+            border-right: 1px solid var(--border);
+            min-height: 0;
+        }
+
+        .grid-layout {
+            display: grid;
+            grid-template-columns: 260px 1fr 320px;
+            grid-template-rows: 1fr;
+            height: 100vh;
+        }
+
+        ::-webkit-scrollbar {
+            width: 6px;
+        }
+
+        ::-webkit-scrollbar-track {
+            background: transparent;
+        }
+
+        ::-webkit-scrollbar-thumb {
+            background: #444;
+            border-radius: 3px;
+        }
+
+        ::-webkit-scrollbar-thumb:hover {
+            background: #666;
+        }
+
+        .selected-row {
+            background-color: rgba(59, 130, 246, 0.15);
+            border-left: 2px solid var(--accent);
+        }
+
+        select,
+        button {
+            transition: all 0.2s ease;
+        }
+
+        #inspector-content {
+            min-height: 0;
+        }
+
+        /* Toast Notification System */
+        #toast-container {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            z-index: 9999;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            pointer-events: none;
+        }
+
+        .toast {
+            min-width: 300px;
+            max-width: 450px;
+            padding: 14px 20px;
+            border-radius: 10px;
+            display: flex;
+            align-items: flex-start;
+            gap: 12px;
+            backdrop-filter: blur(12px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+            transform: translateX(120%);
+            opacity: 0;
+            transition: all 0.3s ease;
+            pointer-events: auto;
+        }
+
+        .toast.show {
+            transform: translateX(0);
+            opacity: 1;
+        }
+
+        .toast.hiding {
+            transform: translateX(120%);
+            opacity: 0;
+        }
+
+        .toast-success {
+            background: rgba(34, 197, 94, 0.15);
+            border-color: rgba(34, 197, 94, 0.3);
+        }
+
+        .toast-error {
+            background: rgba(239, 68, 68, 0.15);
+            border-color: rgba(239, 68, 68, 0.3);
+        }
+
+        .toast-warning {
+            background: rgba(234, 179, 8, 0.15);
+            border-color: rgba(234, 179, 8, 0.3);
+        }
+
+        .toast-info {
+            background: rgba(59, 130, 246, 0.15);
+            border-color: rgba(59, 130, 246, 0.3);
+        }
+
+        .toast-icon {
+            font-size: 20px;
+            flex-shrink: 0;
+        }
+
+        .toast-content {
+            flex: 1;
+        }
+
+        .toast-title {
+            font-weight: 600;
+            font-size: 13px;
+            margin-bottom: 2px;
+        }
+
+        .toast-message {
+            font-size: 12px;
+            color: #a3a3a3;
+            line-height: 1.4;
+        }
+
+        .toast-close {
+            background: none;
+            border: none;
+            color: #666;
+            cursor: pointer;
+            font-size: 16px;
+            padding: 0;
+            margin-left: 8px;
+            transition: color 0.2s;
+        }
+
+        .toast-close:hover {
+            color: #fff;
+        }
+
+        /* Encoding Progress Bar */
+        #encoding-banner {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            z-index: 9998;
+            background: linear-gradient(135deg, rgba(34, 197, 94, 0.1) 0%, rgba(59, 130, 246, 0.1) 100%);
+            border-bottom: 1px solid rgba(34, 197, 94, 0.3);
+            padding: 12px 20px;
+            display: none;
+        }
+
+        #encoding-banner.show {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+        }
+
+        .progress-bar {
+            flex: 1;
+            height: 6px;
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 3px;
+            overflow: hidden;
+        }
+
+        .progress-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #22c55e, #3b82f6);
+            border-radius: 3px;
+            transition: width 0.3s ease;
+        }
+
+        /* Grouped View Styles */
+        .urgent-section {
+            background-color: rgba(127, 29, 29, 0.2);
+            border-bottom: 1px solid rgba(127, 29, 29, 0.4);
+        }
+
+        .client-header {
+            background-color: #1a1a1a;
+            border-bottom: 1px solid #333;
+            cursor: pointer;
+            transition: background-color 0.2s;
+        }
+
+        .client-header:hover {
+            background-color: #222;
+        }
+
+        .client-badge {
+            font-size: 10px;
+            padding: 2px 6px;
+            border-radius: 4px;
+            background: #333;
+            color: #aaa;
+            font-weight: 600;
+        }
+
+        .btn-action-green {
+            background-color: rgba(34, 197, 94, 0.2);
+            color: #4ade80;
+            border: 1px solid rgba(34, 197, 94, 0.4);
+            padding: 4px 12px;
+            border-radius: 6px;
+            font-size: 11px;
+            font-weight: 600;
+            cursor: pointer;
+        }
+
+        .btn-action-green:hover {
+            background-color: rgba(34, 197, 94, 0.3);
+        }
+
+        .btn-action-blue {
+            background-color: rgba(59, 130, 246, 0.2);
+            color: #60a5fa;
+            border: 1px solid rgba(59, 130, 246, 0.4);
+            padding: 4px 12px;
+            border-radius: 6px;
+            font-size: 11px;
+            font-weight: 600;
+            cursor: pointer;
+        }
+
+        .btn-action-blue:hover {
+            background-color: rgba(59, 130, 246, 0.3);
+        }
+    </style>
+</head>
+
+<body>
+
+    <!-- Toast Notification Container -->
+    <div id="toast-container"></div>
+
+    <!-- Encoding Progress Banner -->
+    <div id="encoding-banner">
+        <span class="text-sm flex items-center gap-2"><svg class="w-4 h-4" fill="none" stroke="currentColor"
+                stroke-width="1.5" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round"
+                    d="M15.362 5.214A8.252 8.252 0 0112 21 8.25 8.25 0 016.038 7.048 8.287 8.287 0 009 9.6a8.983 8.983 0 013.361-6.867 8.21 8.21 0 003 2.48z" />
+                <path stroke-linecap="round" stroke-linejoin="round"
+                    d="M12 18a3.75 3.75 0 00.495-7.467 5.99 5.99 0 00-1.925 3.546 5.974 5.974 0 01-2.133-1A3.75 3.75 0 0012 18z" />
+            </svg><strong id="encoding-job">Job</strong></span>
+        <span id="encoding-profile" class="text-xs text-[#888]">Broadcast HEVC</span>
+        <div class="progress-bar">
+            <div id="encoding-progress" class="progress-fill" style="width: 0%"></div>
+        </div>
+        <span id="encoding-percent" class="text-xs font-mono text-[#aaa]">0%</span>
+        <span id="encoding-eta" class="text-xs text-[#666]">--</span>
+    </div>
+
+    <div class="grid-layout">
+        <!-- LEFT: INPUT & DROP ZONE -->
+        <div class="panel flex flex-col">
+            <div class="p-5 border-b border-[#333]">
+                <h2 class="text-[10px] font-bold text-[#666] uppercase tracking-[0.2em]">Input Source</h2>
+            </div>
+
+            <!-- Minimalist Drop Zone -->
+            <div id="drop-zone"
+                class="m-5 flex-1 border border-dashed border-[#444] rounded-xl flex flex-col items-center justify-center cursor-pointer hover:border-white hover:bg-[#222] transition-all group relative overflow-hidden">
+                <div
+                    class="absolute inset-0 bg-gradient-to-br from-blue-500/5 to-purple-500/5 opacity-0 group-hover:opacity-100 transition-opacity">
+                </div>
+
+                <!-- Modern Icon -->
+                <svg class="w-12 h-12 text-[#444] group-hover:text-white transition-colors mb-4" fill="none"
+                    stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5"
+                        d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12">
+                    </path>
+                </svg>
+
+                <p class="text-sm font-medium text-[#888] group-hover:text-white transition-colors">Drop Media</p>
+                <input type="file" id="file-input" class="hidden" multiple>
+            </div>
+
+            <div class="p-5 border-t border-[#333]">
+                <h3 class="text-[10px] font-bold text-[#666] mb-4 uppercase tracking-[0.2em]">Watch Folders</h3>
+                <ul class="space-y-3">
+                    <li class="flex items-center gap-3 text-[#aaa] hover:text-white transition-colors cursor-default">
+                        <div class="w-1.5 h-1.5 rounded-full bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.4)]">
+                        </div>
+                        <span class="font-medium">Auto Pilot</span>
+                    </li>
+                    <li class="flex items-center gap-3 text-[#aaa] hover:text-white transition-colors cursor-default">
+                        <div class="w-1.5 h-1.5 rounded-full bg-amber-500 shadow-[0_0_8px_rgba(245,158,11,0.4)]"></div>
+                        <span class="font-medium">Human Review</span>
+                    </li>
+                </ul>
+            </div>
+
+            <div class="p-5 border-t border-[#333]">
+                <h3 class="text-[10px] font-bold text-[#666] mb-4 uppercase tracking-[0.2em]">System</h3>
+
+                <div class="space-y-2 text-xs">
+                    <div class="flex items-center justify-between">
+                        <span class="text-[#888]">Manager</span>
+                        <span id="sys-manager" class="font-mono text-[#666]">--</span>
+                    </div>
+                    <div class="flex items-center justify-between">
+                        <span class="text-[#888]">SSD</span>
+                        <span id="sys-ssd" class="font-mono text-[#666]">--</span>
+                    </div>
+                    <div class="flex items-center justify-between">
+                        <span class="text-[#888]">Free</span>
+                        <span id="sys-disk" class="font-mono text-[#666]">--</span>
+                    </div>
+                </div>
+
+                <div class="mt-4">
+                    <label class="block text-[10px] font-bold text-[#666] uppercase tracking-wider mb-2">Admin
+                        Token</label>
+                    <input id="admin-token-input" type="password" placeholder="(optional, for remote access)"
+                        class="w-full bg-[#222] border border-[#333] rounded-lg px-3 py-2 text-xs text-white focus:border-[#555] focus:ring-0 outline-none" />
+                    <div class="grid grid-cols-2 gap-2 mt-2">
+                        <button onclick="saveAdminToken()"
+                            class="bg-[#222] hover:bg-[#2a2a2a] text-[#aaa] hover:text-white py-2 rounded-lg text-xs border border-[#333] transition-colors">
+                            Save
+                        </button>
+                        <button onclick="clearAdminToken()"
+                            class="bg-[#222] hover:bg-[#2a2a2a] text-[#aaa] hover:text-white py-2 rounded-lg text-xs border border-[#333] transition-colors">
+                            Clear
+                        </button>
+                    </div>
+                </div>
+
+                <button onclick="restartManager()" id="btn-restart-manager"
+                    class="w-full mt-3 bg-[#222] hover:bg-[#2a2a2a] text-[#aaa] hover:text-white py-2.5 rounded-lg text-xs border border-[#333] transition-colors">
+                    Restart Manager
+                </button>
+            </div>
+        </div>
+
+        <!-- CENTER: BATCH LIST -->
+        <div class="panel flex flex-col relative border-r-0">
+            <!-- Tabs Header -->
+            <div class="flex border-b border-[#333] bg-[#1a1a1a]">
+                <button onclick="switchTab('active')" id="tab-active"
+                    class="flex-1 py-3 text-[11px] font-bold uppercase tracking-wider text-white border-b-2 border-blue-500 bg-[#222]">Active</button>
+                <button onclick="switchTab('by_client')" id="tab-by_client"
+                    class="flex-1 py-3 text-[11px] font-bold uppercase tracking-wider text-[#666] hover:text-[#aaa] border-b-2 border-transparent">By
+                    Client</button>
+                <button onclick="switchTab('completed')" id="tab-completed"
+                    class="flex-1 py-3 text-[11px] font-bold uppercase tracking-wider text-[#666] hover:text-[#aaa] border-b-2 border-transparent">Completed</button>
+            </div>
+
+            <div class="p-3 border-b border-[#333] flex justify-between items-center bg-[#1a1a1a]">
+                <h2 class="text-[10px] font-bold text-[#666] uppercase tracking-[0.2em]" id="list-title">Queue</h2>
+                <div class="flex gap-3 items-center">
+                    <span class="text-[9px] text-[#444] font-mono">v2.1 (Live)</span>
+                    <button onclick="fetchJobs()"
+                        class="text-[10px] font-bold text-[#666] hover:text-white uppercase tracking-wider transition-colors">Refresh</button>
+                </div>
+            </div>
+
+            <div class="flex-1 overflow-y-auto bg-[#111]" id="flat-view">
+                <table class="w-full text-left">
+                    <thead
+                        class="bg-[#161616] text-[#666] sticky top-0 text-[11px] uppercase tracking-wider font-semibold border-b border-[#222]">
+                        <tr>
+                            <th class="p-4 w-12"></th>
+                            <th class="p-4">Name</th>
+                            <th class="p-4">Status</th>
+                            <th class="p-4">Elapsed</th>
+                            <th class="p-4 w-32">Progress</th>
+                        </tr>
+                    </thead>
+                    <tbody id="job-list" class="divide-y divide-[#222]">
+                        <!-- Jobs injected here -->
+                    </tbody>
+                </table>
+            </div>
+
+            <!-- BY CLIENT VIEW (Grouped) -->
+            <div class="flex-1 overflow-y-auto bg-[#111] hidden" id="grouped-view">
+                <!-- Will be populated by renderGroupedView() -->
+            </div>
+
+            <!-- Mini Log -->
+            <div class="h-32 border-t border-[#333] bg-[#0f0f0f] p-3 overflow-y-auto font-mono text-[10px] text-[#555]"
+                id="mini-log">
+                <div class="text-[#333]">System Ready...</div>
+            </div>
+        </div>
+
+        <!-- RIGHT: INSPECTOR -->
+        <div class="panel flex flex-col bg-[#1a1a1a] border-l border-[#333]">
+            <div class="p-5 border-b border-[#333]">
+                <h2 class="text-[10px] font-bold text-[#666] uppercase tracking-[0.2em]">Inspector</h2>
+            </div>
+
+            <div id="inspector-content" class="p-6 flex-1 overflow-y-auto hidden">
+                <!-- Header -->
+                <div class="mb-8">
+                    <h1 class="text-xl font-medium text-white mb-2 truncate tracking-tight" id="insp-title">Filename
+                    </h1>
+                    <p class="text-[11px] text-[#666] font-mono mb-4" id="insp-id">ID: ...</p>
+
+                    <!-- Live Status Badge -->
+                    <div class="flex items-center gap-3">
+                        <div
+                            class="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-[#222] border border-[#333]">
+                            <div class="w-2 h-2 rounded-full bg-blue-500 animate-pulse" id="insp-status-dot"></div>
+                            <span class="text-xs font-medium text-white" id="insp-status-text">Processing...</span>
+                        </div>
+                        <span id="save-indicator"
+                            class="text-xs font-medium text-emerald-500 opacity-0 transition-opacity duration-500">✓
+                            Saved</span>
+                    </div>
+                </div>
+
+                <!-- ASSISTANT PANEL -->
+                <div class="mb-6 relative">
+                    <button onclick="toggleAssistant()"
+                        class="w-full py-3 bg-gradient-to-r from-purple-900/30 to-purple-800/30 hover:from-purple-900/50 hover:to-purple-800/50 border border-purple-500/30 hover:border-purple-500/60 rounded-lg flex items-center justify-center gap-2 group transition-all">
+                        <svg class="w-5 h-5 text-purple-400 group-hover:text-purple-300" fill="none"
+                            stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                d="M19.428 15.428a2 2 0 00-1.022-.547l-2.384-.477a6 6 0 00-3.86.517l-.318.158a6 6 0 01-3.86.517L6.05 15.21a2 2 0 00-1.806.547M8 4h8l-1 1v5.172a2 2 0 00.586 1.414l5 5c1.26 1.26.367 3.414-1.415 3.414H4.828c-1.782 0-2.674-2.154-1.414-3.414l5-5A2 2 0 009 10.172V5L8 4z" />
+                        </svg>
+                        <span
+                            class="text-xs font-bold text-purple-200 group-hover:text-white uppercase tracking-wider">Open
+                            Omega Assistant</span>
+                    </button>
+
+                    <!-- Chat Popup -->
+                    <div id="assistant-panel"
+                        class="hidden absolute top-14 left-0 w-full min-h-[400px] bg-[#1a1a1a] border border-[#333] rounded-xl shadow-2xl z-20 flex flex-col">
+                        <!-- Header -->
+                        <div
+                            class="flex items-center justify-between p-3 border-b border-[#333] bg-[#222] rounded-t-xl">
+                            <div class="flex items-center gap-2">
+                                <span class="w-2 h-2 rounded-full bg-purple-500 animate-pulse"></span>
+                                <span class="text-xs font-bold text-white uppercase tracking-wider">Gemini 3 Fast</span>
+                            </div>
+                            <button onclick="toggleAssistant()" class="text-[#666] hover:text-white">✕</button>
+                        </div>
+
+                        <!-- Chat Area -->
+                        <div id="chat-messages"
+                            class="flex-1 p-4 overflow-y-auto space-y-4 max-h-[350px] min-h-[300px] flex flex-col">
+                            <div class="bg-[#222] self-start rounded-lg p-3 max-w-[90%] border border-[#333]">
+                                <p class="text-[11px] text-[#aaa]">Hi! I'm ready to help with <strong class="text-white"
+                                        id="chat-job-id">this job</strong>. Ask me anything or tell me to edit
+                                    subtitles.</p>
+                            </div>
+                        </div>
+
+                        <!-- Input -->
+                        <div class="p-3 border-t border-[#333] bg-[#222] rounded-b-xl relative">
+                            <textarea id="chat-input" placeholder="Type a message (" Remove first 2
+                                lines", "Fix spelling" )..."
+                                class="w-full bg-[#111] border border-[#333] rounded-lg px-3 py-2 text-xs text-white focus:border-purple-500 focus:ring-0 outline-none resize-none h-20 placeholder-[#555]"
+                                onkeydown="handleChatKey(event)"></textarea>
+                            <button onclick="sendChatMessage()" id="chat-send-btn"
+                                class="absolute right-5 bottom-5 text-purple-500 hover:text-purple-400 disabled:opacity-50">
+                                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                        d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" />
+                                </svg>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Process Stepper -->
+                <div class="mb-8">
+                    <h3 class="text-[10px] font-bold text-[#666] uppercase tracking-wider mb-4">Process Flow</h3>
+                    <div class="relative flex flex-col gap-4 pl-2 border-l border-[#333]">
+                        <!-- Step 1: Ingest -->
+                        <div class="flex items-center gap-3 relative">
+                            <div class="absolute -left-[13px] w-6 h-6 rounded-full bg-[#1a1a1a] border border-[#333] flex items-center justify-center z-10"
+                                id="step-ingest-dot">
+                                <div class="w-1.5 h-1.5 rounded-full bg-[#444]" id="step-ingest-inner"></div>
+                            </div>
+                            <span class="text-xs text-[#666] ml-6" id="step-ingest-text">Ingest & Transcribe</span>
+                        </div>
+                        <!-- Step 2: Translate -->
+                        <div class="flex items-center gap-3 relative">
+                            <div class="absolute -left-[13px] w-6 h-6 rounded-full bg-[#1a1a1a] border border-[#333] flex items-center justify-center z-10"
+                                id="step-translate-dot">
+                                <div class="w-1.5 h-1.5 rounded-full bg-[#444]" id="step-translate-inner"></div>
+                            </div>
+                            <span class="text-xs text-[#666] ml-6" id="step-translate-text">Translate & Review</span>
+                        </div>
+                        <!-- Step 3: Burn -->
+                        <div class="flex items-center gap-3 relative">
+                            <div class="absolute -left-[13px] w-6 h-6 rounded-full bg-[#1a1a1a] border border-[#333] flex items-center justify-center z-10"
+                                id="step-burn-dot">
+                                <div class="w-1.5 h-1.5 rounded-full bg-[#444]" id="step-burn-inner"></div>
+                            </div>
+                            <span class="text-xs text-[#666] ml-6" id="step-burn-text">Finalize & Burn</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Monitoring -->
+                <div id="monitoring-section" class="mb-8 bg-[#1a1a1a] border border-[#333] rounded-lg p-4">
+                    <div class="flex items-center justify-between mb-3">
+                        <span class="text-[10px] font-bold text-[#666] uppercase tracking-wider">Monitoring</span>
+                        <span id="monitor-total" class="text-[10px] text-[#666] font-mono">--</span>
+                    </div>
+                    <div class="mb-3">
+                        <div class="flex items-center justify-between cursor-pointer group"
+                            onclick="toggleTimeline('stage')">
+                            <div
+                                class="text-[10px] font-bold text-[#555] uppercase tracking-wider group-hover:text-[#888]">
+                                Pipeline Timeline
+                            </div>
+                            <div class="flex items-center gap-2">
+                                <span id="timeline-stage-summary" class="text-[10px] text-[#666] font-mono"></span>
+                                <span id="timeline-stage-toggle"
+                                    class="text-[10px] text-[#555] group-hover:text-[#888]">▼</span>
+                            </div>
+                        </div>
+                        <div id="monitor-stage-list"
+                            class="space-y-1 text-xs text-[#aaa] font-mono hidden mt-2 max-h-48 overflow-y-auto"></div>
+                    </div>
+                    <div class="mb-3">
+                        <div class="flex items-center justify-between cursor-pointer group"
+                            onclick="toggleTimeline('cloud')">
+                            <div
+                                class="text-[10px] font-bold text-[#555] uppercase tracking-wider group-hover:text-[#888]">
+                                Cloud Timeline
+                            </div>
+                            <div class="flex items-center gap-2">
+                                <span id="monitor-cloud-summary" class="text-[10px] text-[#666]">--</span>
+                                <span id="timeline-cloud-toggle"
+                                    class="text-[10px] text-[#555] group-hover:text-[#888]">▼</span>
+                            </div>
+                        </div>
+                        <div id="monitor-cloud-list"
+                            class="space-y-1 text-xs text-[#aaa] font-mono hidden mt-2 max-h-48 overflow-y-auto"></div>
+                    </div>
+                    <div>
+                        <div class="flex items-center justify-between cursor-pointer group"
+                            onclick="toggleTimeline('status')">
+                            <div
+                                class="text-[10px] font-bold text-[#555] uppercase tracking-wider group-hover:text-[#888]">
+                                Recent Status</div>
+                            <span id="timeline-status-toggle"
+                                class="text-[10px] text-[#555] group-hover:text-[#888]">▼</span>
+                        </div>
+                        <div id="monitor-status-list"
+                            class="space-y-1 text-xs text-[#888] font-mono hidden mt-2 max-h-32 overflow-y-auto"></div>
+                    </div>
+                </div>
+
+                <!-- Settings Form -->
+                <div class="space-y-6">
+                    <div class="group">
+                        <label
+                            class="block text-[10px] font-bold text-[#666] uppercase tracking-wider mb-2 group-hover:text-[#888] transition-colors"
+                            title="Language subtitles will be translated to">Subtitle
+                            Language</label>
+                        <div class="relative">
+                            <select id="insp-lang" onchange="updateJobSetting('target_language', this.value)"
+                                class="w-full bg-[#222] border border-[#333] rounded-lg px-3 py-2.5 text-sm text-white focus:border-[#555] focus:ring-0 outline-none appearance-none hover:bg-[#262626] transition-colors">
+                                <option value="is">Icelandic</option>
+                                <option value="en">English</option>
+                                <option value="es">Spanish</option>
+                                <option value="pt">Portuguese</option>
+                                <option value="fr">French</option>
+                                <option value="de">German</option>
+                                <option value="it">Italian</option>
+                            </select>
+                            <div class="absolute right-3 top-3 pointer-events-none text-[#666]">▼</div>
+                        </div>
+                    </div>
+
+                    <div class="group">
+                        <label
+                            class="block text-[10px] font-bold text-[#666] uppercase tracking-wider mb-2 group-hover:text-[#888] transition-colors"
+                            title="Word choices for specific ministries">Terminology
+                            Style</label>
+                        <div class="relative">
+                            <select id="insp-profile" onchange="updateJobSetting('program_profile', this.value)"
+                                class="w-full bg-[#222] border border-[#333] rounded-lg px-3 py-2.5 text-sm text-white focus:border-[#555] focus:ring-0 outline-none appearance-none hover:bg-[#262626] transition-colors">
+                                <option value="standard">Standard (Omega TV)</option>
+                                <option value="in_touch">In Touch</option>
+                                <option value="benny_hinn">Benny Hinn</option>
+                            </select>
+                            <div class="absolute right-3 top-3 pointer-events-none text-[#666]">▼</div>
+                        </div>
+                    </div>
+
+                    <div class="group">
+                        <label
+                            class="block text-[10px] font-bold text-[#666] uppercase tracking-wider mb-2 group-hover:text-[#888] transition-colors"
+                            title="How subtitles appear on screen">Subtitle
+                            Look</label>
+                        <div class="relative">
+                            <select id="insp-style" onchange="updateJobSetting('subtitle_style', this.value)"
+                                class="w-full bg-[#222] border border-[#333] rounded-lg px-3 py-2.5 text-sm text-white focus:border-[#555] focus:ring-0 outline-none appearance-none hover:bg-[#262626] transition-colors">
+                                <option value="Classic">Classic Box</option>
+                                <option value="Modern">Modern Clean</option>
+                                <option value="Apple">Apple Pro</option>
+                            </select>
+                            <div class="absolute right-3 top-3 pointer-events-none text-[#666]">▼</div>
+                        </div>
+                    </div>
+
+                    <div class="group">
+                        <label
+                            class="block text-[10px] font-bold text-[#666] uppercase tracking-wider mb-2 group-hover:text-[#888] transition-colors"
+                            title="Video encoding settings">Export
+                            Quality</label>
+                        <div class="relative">
+                            <select id="insp-delivery-profile"
+                                onchange="updateJobSetting('delivery_profile', this.value)"
+                                class="w-full bg-[#222] border border-[#333] rounded-lg px-3 py-2.5 text-sm text-white focus:border-[#555] focus:ring-0 outline-none appearance-none hover:bg-[#262626] transition-colors">
+                                <option value="broadcast_hevc">Broadcast HEVC (Fast)</option>
+                                <option value="broadcast_h264">Broadcast H.264 (Universal)</option>
+                                <option value="web">Web Optimized</option>
+                                <option value="archive">Archive (Master)</option>
+                                <option value="universal">Universal (Safe Default)</option>
+                            </select>
+                            <div class="absolute right-3 top-3 pointer-events-none text-[#666]">▼</div>
+                        </div>
+                        <p id="delivery-profile-desc" class="text-[10px] text-[#555] mt-1">Fast hardware encoding (9x),
+                            modern compatibility</p>
+                    </div>
+
+                    <div class="group">
+                        <label
+                            class="block text-[10px] font-bold text-[#666] uppercase tracking-wider mb-2 group-hover:text-[#888] transition-colors">Workflow
+                            Mode</label>
+                        <!-- Mode Toggle -->
+                        <div class="flex bg-[#222] p-1 rounded-lg mb-6">
+                            <button id="btn-mode-auto" onclick="setMode('AUTO')"
+                                class="flex-1 py-2 text-[11px] font-medium rounded-md transition-all text-[#666] hover:text-white hover:bg-[#333]"
+                                title="Burns video automatically when ready">Automatic</button>
+                            <button id="btn-mode-review" onclick="setMode('REVIEW')"
+                                class="flex-1 py-2 text-[11px] font-medium rounded-md transition-all text-[#666] hover:text-white hover:bg-[#333]"
+                                title="Pauses for your approval before burning">Review First</button>
+                        </div>
+
+                        <!-- Subtitle Editor Trigger -->
+                        <button onclick="openSurgical()"
+                            class="w-full mb-6 flex items-center justify-center gap-2 bg-[#222] hover:bg-[#333] border border-[#333] hover:border-[#444] text-[#888] hover:text-white py-2 rounded transition-all group"
+                            title="Edit individual subtitle lines and timing">
+                            <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="1.5"
+                                viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round"
+                                    d="M16.862 4.487l1.687-1.688a1.875 1.875 0 112.652 2.652L6.832 19.82a4.5 4.5 0 01-1.897 1.13l-2.685.8.8-2.685a4.5 4.5 0 011.13-1.897L16.863 4.487zm0 0L19.5 7.125" />
+                            </svg>
+                            <span class="text-xs font-bold uppercase tracking-wider">Edit Subtitles</span>
+                        </button>
+
+                        <!-- Quality Report -->
+                        <div id="quality-report" class="hidden mb-6 bg-[#1a1a1a] border border-[#333] rounded-lg p-4">
+                            <div class="flex items-center justify-between mb-3">
+                                <span class="text-[10px] font-bold text-[#666] uppercase tracking-wider">Quality
+                                    Report</span>
+                                <div id="qr-rating"
+                                    class="px-2 py-1 rounded bg-emerald-500/20 text-emerald-400 text-xs font-bold">--
+                                </div>
+                            </div>
+                            <div id="qr-tier" class="text-sm font-medium text-white mb-2">--</div>
+                            <p id="qr-summary" class="text-xs text-[#888] leading-relaxed mb-3">--</p>
+
+                            <div id="qr-issues-container" class="hidden mb-3">
+                                <span
+                                    class="text-[10px] font-bold text-[#666] uppercase tracking-wider block mb-1">Major
+                                    Issues</span>
+                                <ul id="qr-issues" class="list-disc list-inside text-xs text-red-400"></ul>
+                            </div>
+
+                            <div id="qr-suggestions-container" class="hidden">
+                                <span
+                                    class="text-[10px] font-bold text-[#666] uppercase tracking-wider block mb-1">Suggestions</span>
+                                <p id="qr-suggestions" class="text-xs text-[#888] italic"></p>
+                            </div>
+                        </div>
+
+                        <!-- Broadcast QA -->
+                        <div id="broadcast-qa" class="hidden mb-6 bg-[#1a1a1a] border border-[#333] rounded-lg p-4">
+                            <div class="flex items-center justify-between mb-3">
+                                <span class="text-[10px] font-bold text-[#666] uppercase tracking-wider">Broadcast
+                                    QA</span>
+                                <div id="qa-caps-badge"
+                                    class="px-2 py-1 rounded bg-red-500/20 text-red-300 text-xs font-bold">--</div>
+                            </div>
+                            <p id="qa-caps-text" class="text-xs text-[#888] leading-relaxed mb-3">--</p>
+
+                            <div id="qa-caps-samples-container" class="hidden">
+                                <span
+                                    class="text-[10px] font-bold text-[#666] uppercase tracking-wider block mb-1">Examples</span>
+                                <ul id="qa-caps-samples" class="list-disc list-inside text-xs text-[#aaa]"></ul>
+                            </div>
+                        </div>
+
+                        <!-- Subtitle QA -->
+                        <div id="subtitle-qa" class="hidden mb-6 bg-[#1a1a1a] border border-[#333] rounded-lg p-4">
+                            <div class="flex items-center justify-between mb-3">
+                                <span class="text-[10px] font-bold text-[#666] uppercase tracking-wider">Subtitle
+                                    QA</span>
+                                <div id="qa-srt-badge"
+                                    class="px-2 py-1 rounded bg-emerald-500/20 text-emerald-300 text-xs font-bold">--
+                                </div>
+                            </div>
+                            <div class="grid grid-cols-2 gap-2 text-xs text-[#888] mb-2">
+                                <div>High CPS (&gt;17): <span id="qa-srt-cps17">0</span></div>
+                                <div>Very High CPS (&gt;20): <span id="qa-srt-cps20">0</span></div>
+                                <div>Short (&lt;1.0s): <span id="qa-srt-short">0</span></div>
+                                <div>Long (&gt;7.0s): <span id="qa-srt-long">0</span></div>
+                                <div>Long Lines (&gt;42): <span id="qa-srt-longlines">0</span></div>
+                                <div>Dangling Endings: <span id="qa-srt-dangling">0</span></div>
+                            </div>
+                            <p id="qa-srt-note" class="text-[10px] text-[#666]">--</p>
+                        </div>
+
+                        <!-- Output -->
+                        <div id="output-section" class="hidden mb-6 bg-[#1a1a1a] border border-[#333] rounded-lg p-4">
+                            <div class="flex items-center justify-between mb-3">
+                                <span class="text-[10px] font-bold text-[#666] uppercase tracking-wider">Output</span>
+                                <a id="btn-download-output" href="#"
+                                    class="text-xs font-bold text-blue-400 hover:text-blue-300 transition-colors">Download</a>
+                            </div>
+                            <p id="output-path" class="text-xs text-[#888] font-mono break-all">--</p>
+                        </div>
+
+                        <!-- Last Error / Halt -->
+                        <div id="error-box" class="hidden mb-6 bg-red-900/10 border border-red-900/30 rounded-lg p-4">
+                            <div class="flex items-center justify-between mb-2">
+                                <span class="text-[10px] font-bold text-red-300 uppercase tracking-wider">Last
+                                    Error</span>
+                                <span id="halt-badge"
+                                    class="hidden px-2 py-1 rounded bg-red-500/20 text-red-300 text-[10px] font-bold uppercase tracking-wider">Halted</span>
+                            </div>
+                            <p id="error-text" class="text-xs text-[#aaa] font-mono break-words">--</p>
+                        </div>
+
+                        <hr class="border-[#333] my-8">
+
+                        <!-- Actions -->
+                        <div class="space-y-3">
+                            <button id="btn-approve" onclick="approveBurn()"
+                                class="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-medium py-3 rounded-lg shadow-lg shadow-emerald-900/20 transition-all hidden flex items-center justify-center gap-2"
+                                title="Finishes review and starts video burning">
+                                <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2"
+                                    viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" d="M4.5 12.75l6 6 9-13.5" />
+                                </svg>
+                                Approve & Burn
+                            </button>
+
+                            <div class="grid grid-cols-2 gap-3">
+                                <button onclick="resetReview()"
+                                    class="w-full bg-[#222] hover:bg-[#2a2a2a] text-[#aaa] hover:text-white py-2.5 rounded-lg text-xs border border-[#333] transition-colors"
+                                    title="Restarts from the review stage">
+                                    Restart from Review
+                                </button>
+
+                                <button onclick="forceBurn()"
+                                    class="w-full bg-[#222] hover:bg-red-900/20 text-[#aaa] hover:text-red-400 py-2.5 rounded-lg text-xs border border-[#333] hover:border-red-900/50 transition-colors"
+                                    title="Skip checks and burn immediately">
+                                    Burn Now
+                                </button>
+                            </div>
+
+                            <div class="grid grid-cols-2 gap-3">
+                                <button onclick="retryTranslate()"
+                                    class="w-full bg-[#222] hover:bg-[#2a2a2a] text-[#aaa] hover:text-white py-2.5 rounded-lg text-xs border border-[#333] transition-colors"
+                                    title="Re-runs translation from the transcript">
+                                    Redo Translation
+                                </button>
+                                <button onclick="retryReview()"
+                                    class="w-full bg-[#222] hover:bg-[#2a2a2a] text-[#aaa] hover:text-white py-2.5 rounded-lg text-xs border border-[#333] transition-colors"
+                                    title="Re-runs AI quality review">
+                                    Redo AI Review
+                                </button>
+                            </div>
+
+                            <button id="btn-unhalt" onclick="unhaltJob()"
+                                class="w-full bg-emerald-900/10 hover:bg-emerald-900/30 text-emerald-500/70 hover:text-emerald-400 py-2.5 rounded-lg text-xs border border-emerald-900/20 hover:border-emerald-900/50 transition-colors hidden"
+                                title="Resumes job from the best available point">
+                                ▶ Resume
+                            </button>
+
+                            <button id="btn-reburn" onclick="reBurn()"
+                                class="w-full bg-[#222] hover:bg-emerald-900/20 text-[#aaa] hover:text-emerald-400 py-2.5 rounded-lg text-xs border border-[#333] hover:border-emerald-900/50 transition-colors mt-2 hidden"
+                                title="Burns video again with current settings">
+                                Burn Again
+                            </button>
+
+                            <button onclick="deleteJob()"
+                                class="w-full bg-red-900/10 hover:bg-red-900/30 text-red-500/70 hover:text-red-400 py-2.5 rounded-lg text-xs border border-red-900/20 hover:border-red-900/50 transition-colors mt-6 flex items-center justify-center gap-2"
+                                title="Permanently removes this job">
+                                <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="1.5"
+                                    viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round"
+                                        d="M14.74 9l-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 01-2.244 2.077H8.084a2.25 2.25 0 01-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 00-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 013.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 00-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 00-7.5 0" />
+                                </svg>
+                                Delete
+                            </button>
+                        </div>
+
+                        <div class="mt-8 p-4 bg-[#222] border border-[#333] rounded-lg flex items-center gap-3 hidden"
+                            id="lock-msg">
+                            <div class="w-2 h-2 rounded-full bg-amber-500"></div>
+                            <span class="text-xs text-[#888]">Settings locked during processing</span>
+                        </div>
+                    </div>
+
+                    <!-- Empty State -->
+                    <div id="inspector-empty" class="flex-1 flex flex-col items-center justify-center text-[#444]">
+                        <svg class="w-12 h-12 mb-4 opacity-20" fill="none" stroke="currentColor" stroke-width="1.5"
+                            viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round"
+                                d="M3.75 13.5l10.5-11.25L12 10.5h8.25L9.75 21.75 12 13.5H3.75z" />
+                        </svg>
+                        <p class="text-xs font-medium uppercase tracking-wider">No Job Selected</p>
+                    </div>
+                </div>
+            </div>
+
+            <script>
+                // --- GLOBALS ---
+                let jobsData = [];
+                let groupedData = null; // Stores fetched grouped data
+                let selectedStem = null;
+                let currentTab = 'active'; // 'active', 'by_client', 'completed'
+                let collapsedGroups = {}; // Stores collapsed state of client groups
+                const ADMIN_TOKEN_STORAGE_KEY = 'omega_admin_token';
+
+                function getAdminToken() {
+                    // Default to dev token if not set
+                    return localStorage.getItem(ADMIN_TOKEN_STORAGE_KEY) || 'omega-secret-token-2024';
+                }
+
+                function setAdminToken(token) {
+                    if (token) localStorage.setItem(ADMIN_TOKEN_STORAGE_KEY, token);
+                    else localStorage.removeItem(ADMIN_TOKEN_STORAGE_KEY);
+                }
+
+                function adminHeaders() {
+                    const token = getAdminToken();
+                    return token ? { 'X-Omega-Token': token } : {};
+                }
+
+                // --- TAB SWITCHING ---
+                function switchTab(tab) {
+                    currentTab = tab;
+
+                    // Update UI Buttons
+                    ['active', 'by_client', 'completed'].forEach(t => {
+                        const btn = document.getElementById(`tab-${t}`);
+                        if (t === tab) {
+                            btn.style.color = 'white';
+                            btn.style.borderColor = '#3b82f6';
+                            btn.classList.add('bg-[#222]');
+                        } else {
+                            btn.style.color = '#666';
+                            btn.style.borderColor = 'transparent';
+                            btn.classList.remove('bg-[#222]');
+                        }
+                    });
+
+                    // Toggle Views
+                    const flatView = document.getElementById('flat-view');
+                    const groupedView = document.getElementById('grouped-view');
+
+                    if (tab === 'by_client') {
+                        flatView.classList.add('hidden');
+                        groupedView.classList.remove('hidden');
+                        document.getElementById('list-title').innerText = "Client Overview";
+                    } else {
+                        flatView.classList.remove('hidden');
+                        groupedView.classList.add('hidden');
+                        document.getElementById('list-title').innerText = tab === 'active' ? "Active Queue" : "Completed Jobs";
+                    }
+
+                    fetchJobs();
+                }
+
+                // --- DATA FETCHING ---
+                async function fetchJobs() {
+                    try {
+                        // If in grouped mode, fetch grouped data
+                        if (currentTab === 'by_client') {
+                            const res = await fetch('/api/jobs_grouped', { headers: adminHeaders() });
+                            if (res.ok) {
+                                groupedData = await res.json();
+                                renderGroupedView();
+                            }
+                        } else {
+                            // Standard flat fetch
+                            const res = await fetch('/api/jobs', { headers: adminHeaders() });
+                            if (res.ok) {
+                                jobsData = await res.json();
+                                renderList();
+                            }
+                        }
+                    } catch (e) {
+                        console.error("Fetch failed", e);
+                    }
+                }
+
+                // --- RENDER GROUPED VIEW (New) ---
+                function renderGroupedView() {
+                    const container = document.getElementById('grouped-view');
+                    if (!groupedData) return;
+
+                    let html = '';
+
+                    // 1. URGENT SECTION (Always top, always expanded)
+                    if (groupedData.urgent && groupedData.urgent.length > 0) {
+                        html += `
+                            <div class="urgent-section p-3">
+                                <div class="flex items-center gap-2 mb-2 text-red-400">
+                                    <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126zM12 15.75h.007v.008H12v-.008z"/></svg>
+                                    <span class="text-xs font-bold uppercase tracking-wider">Urgent Attention Needed</span>
+                                </div>
+                                <div class="space-y-1">
+                                    ${groupedData.urgent.map(job => renderJobRow(job, true)).join('')}
+                                </div>
+                            </div>
+                        `;
+                    }
+
+                    // 2. CLIENT GROUPS
+                    groupedData.client_names.forEach(client => {
+                        const jobs = groupedData.by_client[client];
+                        const isCollapsed = collapsedGroups[client] === true; // Default expanded if undefined? No, default collapsed? Let's say default collapsed for tidiness
+                        // Actually, let's default to collapsed (true) except if explicitly false
+                        const collapsed = (collapsedGroups[client] !== false);
+
+                        html += `
+                            <div>
+                                <div class="client-header p-3 flex items-center justify-between" onclick="toggleClientGroup('${client}')">
+                                    <div class="flex items-center gap-3">
+                                        <span class="text-[#666] text-[10px] transform transition-transform ${collapsed ? '' : 'rotate-90'}">▶</span>
+                                        <span class="text-xs font-bold text-[#ddd]">${client}</span>
+                                        <span class="client-badge">${jobs.length}</span>
+                                    </div>
+                                </div>
+                                <div class="${collapsed ? 'hidden' : 'block'} bg-[#111]">
+                                    ${jobs.map(job => renderJobRow(job)).join('')}
+                                </div>
+                            </div>
+                        `;
+                    });
+
+                    container.innerHTML = html;
+                }
+
+                function toggleClientGroup(client) {
+                    // Initialize if undefined (default was collapsed=true involved in logic above, so setting to false opens it)
+                    if (collapsedGroups[client] === undefined) collapsedGroups[client] = true;
+                    collapsedGroups[client] = !collapsedGroups[client];
+                    renderGroupedView();
+                }
+
+                function renderJobRow(job, isUrgent = false) {
+                    const stem = job.file_stem;
+                    const meta = job.meta || {};
+                    const isSelected = (stem === selectedStem);
+
+                    const stage = (job.stage || '').toUpperCase();
+                    const isDone = (stage === 'COMPLETED' || stage === 'DONE' || stage === 'DELIVERED');
+
+                    let statusColor = 'text-[#666]';
+                    if (isDone) statusColor = 'text-emerald-500';
+                    else if (['TRANSLATING', 'BURNING'].includes(stage)) statusColor = 'text-blue-500';
+                    else if (stage === 'FAILED') statusColor = 'text-red-500';
+
+                    const progress = Math.round(job.progress * 100);
+
+                    // Action Button Logic
+                    let actionBtn = '';
+                    if (isDone && stage !== 'DELIVERED') {
+                        actionBtn = `<button onclick="event.stopPropagation(); markDelivered('${stem}')" class="btn-action-green">Mark Delivered</button>`;
+                    } else if (job.stage === 'review_ready') { // review_ready is often custom stage text
+                        actionBtn = `<button onclick="event.stopPropagation(); selectJob('${stem}')" class="btn-action-blue">Approve</button>`;
+                    }
+
+                    return `
+                        <div onclick="selectJob('${stem}')" 
+                             class="p-3 border-b border-[#222] hover:bg-[#1a1a1a] cursor-pointer flex items-center justify-between group ${isSelected ? 'selected-row' : ''} ${isUrgent ? 'bg-red-900/10' : ''}">
+                            
+                            <div class="flex-1 min-w-0 pr-4">
+                                <div class="flex items-center gap-2 mb-1">
+                                    <span class="text-xs font-medium text-white truncate" title="${stem} (Job ID)">${meta.original_stem || stem}</span>
+                                    ${job.due_date ? `<span class="text-[9px] text-[#666] border border-[#333] px-1 rounded">Due: ${job.due_date}</span>` : ''}
+                                </div>
+                                <div class="flex items-center gap-2 text-[10px]">
+                                    <span class="${statusColor} font-bold uppercase">${job.status || job.stage}</span>
+                                    <span class="text-[#444]">•</span>
+                                    <span class="text-[#666] font-mono">${progress}%</span>
+                                    ${meta.original_stem ? `<span class="text-[#444] ml-1" title="Job ID: ${stem}">#${stem.substring(0, 8)}...</span>` : ''}
+                                </div>
+                            </div>
+                            
+                            <div>
+                                ${actionBtn}
+                            </div>
+                        </div>
+                    `;
+                }
+
+                // --- DELIVERY ACTION ---
+                async function markDelivered(stem) {
+                    const btn = event.currentTarget;
+                    const originalText = btn.innerText;
+                    btn.innerText = "Sending...";
+                    btn.disabled = true;
+
+                    try {
+                        const res = await postJson('/api/mark_delivered', { job_stem: stem });
+                        if (res.success) {
+                            showToast('Delivered Successfully', `File: ${res.delivered_filename}`, 'success');
+                            fetchJobs(); // Refresh to update status
+                        } else {
+                            showToast('Delivery Failed', res.error, 'error');
+                            btn.innerText = originalText;
+                            btn.disabled = false;
+                        }
+                    } catch (e) {
+                        showToast('Error', e.message, 'error');
+                        btn.innerText = originalText;
+                        btn.disabled = false;
+                    }
+                }
+
+                // --- OLD RENDER LIST (Kept for Active/Completed tabs) ---
+                function renderList() {
+                    const tbody = document.getElementById('job-list');
+                    tbody.innerHTML = '';
+
+                    // Filter based on tab
+                    const filtered = jobsData.filter(j => {
+                        const s = (j.stage || '').toUpperCase();
+                        const isDone = (s === 'COMPLETED' || s === 'DONE' || s === 'DELIVERED');
+                        if (currentTab === 'completed') return isDone;
+                        return !isDone;
+                    });
+
+                    if (filtered.length === 0) {
+                        tbody.innerHTML = `<tr><td colspan="5" class="p-8 text-center text-[#444] text-xs uppercase tracking-wider">No jobs</td></tr>`;
+                        return;
+                    }
+
+                    filtered.forEach(job => {
+                        const stem = job.file_stem;
+                        const isSelected = (stem === selectedStem);
+
+                        // Status dot color
+                        const stage = (job.stage || '').toUpperCase();
+                        let dotColor = 'bg-gray-500';
+                        if (stage === 'COMPLETED' || stage === 'DONE' || stage === 'DELIVERED') dotColor = 'bg-emerald-500';
+                        else if (stage === 'FAILED') dotColor = 'bg-red-500';
+                        else if (['TRANSCRIBING', 'TRANSLATING', 'BURNING'].includes(stage)) dotColor = 'bg-blue-500 animate-pulse';
+                        else if (stage === 'REVIEW') dotColor = 'bg-amber-500';
+
+                        // Elapsed time logic (simplified)
+                        let elapsed = '--';
+                        if (job.meta && job.meta.ingest_time) {
+                            // ... existing logic would go here, omitting for brevity in this replace block ...
+                            elapsed = '2m'; // Placeholder or keep existing if I can separate logic
+                        }
+
+                        const tr = document.createElement('tr');
+                        tr.className = `border-b border-[#222] hover:bg-[#1a1a1a] cursor-pointer group transition-colors ${isSelected ? 'selected-row' : ''}`;
+                        tr.onclick = () => selectJob(stem);
+
+                        tr.innerHTML = `
+                            <td class="p-4">
+                                <div class="w-2 h-2 rounded-full ${dotColor}"></div>
+                            </td>
+                            <td class="p-4">
+                                <div class="text-xs font-medium text-white group-hover:text-blue-400 transition-colors truncate max-w-[200px]" title="${stem}">${job.meta?.original_stem || stem}</div>
+                                <div class="text-[10px] text-[#666] font-mono mt-0.5">${job.client || ''}</div>
+                            </td>
+                            <td class="p-4">
+                                <span class="text-[10px] font-bold text-[#888] uppercase tracking-wider px-2 py-1 rounded bg-[#222] border border-[#333]">${job.status || job.stage}</span>
+                            </td>
+                            <td class="p-4 text-[11px] text-[#666] font-mono">
+                                ${formatElapsed(job.meta?.ingest_time)}
+                            </td>
+                            <td class="p-4">
+                                <div class="w-24 h-1.5 bg-[#222] rounded-full overflow-hidden">
+                                    <div class="h-full bg-blue-600 rounded-full" style="width: ${(job.progress || 0) * 100}%"></div>
+                                </div>
+                            </td>
+                        `;
+                        tbody.appendChild(tr);
+                    });
+                }
+
+                function formatElapsed(isoTime) {
+                    if (!isoTime) return '--';
+                    try {
+                        const start = new Date(isoTime);
+                        const diff = Date.now() - start;
+                        const mins = Math.floor(diff / 60000);
+                        if (mins < 60) return `${mins}m`;
+                        const hrs = Math.floor(mins / 60);
+                        return `${hrs}h ${mins % 60}m`;
+                    } catch { return '--'; }
+                }
+
+                // ... (Existing Select Job / Polling logic) ...
+
+                // --- TOAST NOTIFICATION SYSTEM ---
+                function showToast(title, message, type = 'info', duration = 5000) {
+                    const container = document.getElementById('toast-container');
+                    if (!container) return;
+
+                    const icons = {
+                        success: `<svg class="w-5 h-5 text-emerald-400" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>`,
+                        error: `<svg class="w-5 h-5 text-red-400" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M9.75 9.75l4.5 4.5m0-4.5l-4.5 4.5M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>`,
+                        warning: `<svg class="w-5 h-5 text-amber-400" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126zM12 15.75h.007v.008H12v-.008z"/></svg>`,
+                        info: `<svg class="w-5 h-5 text-blue-400" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M11.25 11.25l.041-.02a.75.75 0 011.063.852l-.708 2.836a.75.75 0 001.063.853l.041-.021M21 12a9 9 0 11-18 0 9 9 0 0118 0zm-9-3.75h.008v.008H12V8.25z"/></svg>`
+                    };
+
+                    const toast = document.createElement('div');
+                    toast.className = `toast toast-${type}`;
+                    toast.innerHTML = `
+                        <span class="toast-icon">${icons[type] || icons.info}</span>
+                        <div class="toast-content">
+                            <div class="toast-title">${title}</div>
+                            ${message ? `<div class="toast-message">${message}</div>` : ''}
+                        </div>
+                        <button class="toast-close" onclick="this.parentElement.remove()">×</button>
+                    `;
+
+                    container.appendChild(toast);
+
+                    // Trigger animation
+                    requestAnimationFrame(() => {
+                        toast.classList.add('show');
+                    });
+
+                    // Auto-dismiss
+                    if (duration > 0) {
+                        setTimeout(() => {
+                            toast.classList.remove('show');
+                            toast.classList.add('hiding');
+                            setTimeout(() => toast.remove(), 300);
+                        }, duration);
+                    }
+
+                    return toast;
+                }
+
+                // --- ENCODING PROGRESS BANNER ---
+                function showEncodingProgress(jobName, profile, percent, eta = '--') {
+                    const banner = document.getElementById('encoding-banner');
+                    if (!banner) return;
+
+                    document.getElementById('encoding-job').textContent = jobName;
+                    document.getElementById('encoding-profile').textContent = profile;
+                    document.getElementById('encoding-progress').style.width = `${percent}%`;
+                    document.getElementById('encoding-percent').textContent = `${Math.round(percent)}%`;
+                    document.getElementById('encoding-eta').textContent = eta;
+
+                    banner.classList.add('show');
+                }
+
+                function hideEncodingProgress() {
+                    const banner = document.getElementById('encoding-banner');
+                    if (banner) banner.classList.remove('show');
+                }
+
+                // --- ENCODING STATUS POLLING ---
+                async function pollEncodingStatus() {
+                    try {
+                        const res = await fetch('/api/encoding_status');
+                        const data = await res.json();
+
+                        if (data.encoding && data.jobs && data.jobs.length > 0) {
+                            const job = data.jobs[0]; // Show first encoding job
+
+                            // Format elapsed time as ETA estimate
+                            let eta = '--';
+                            if (job.elapsed_seconds) {
+                                const elapsed = Math.floor(job.elapsed_seconds);
+                                const mins = Math.floor(elapsed / 60);
+                                const secs = elapsed % 60;
+                                eta = `${mins}m ${secs}s elapsed`;
+                            }
+
+                            showEncodingProgress(
+                                job.stem,
+                                job.profile,
+                                job.progress || 95,
+                                eta
+                            );
+                        } else {
+                            hideEncodingProgress();
+                        }
+                    } catch (err) {
+                        // Silent fail - don't spam console
+                    }
+                }
+
+                function showSaved() {
+                    const el = document.getElementById('save-indicator');
+                    if (!el) return;
+                    el.classList.remove('opacity-0');
+                    el.classList.add('opacity-100');
+                    setTimeout(() => {
+                        el.classList.add('opacity-0');
+                        el.classList.remove('opacity-100');
+                    }, 1200);
+                }
+
+                // --- INIT ---
+                document.addEventListener('DOMContentLoaded', () => {
+                    fetchJobs();
+                    setInterval(fetchJobs, 2000);
+
+                    // Admin token (optional)
+                    const tokenInput = document.getElementById('admin-token-input');
+                    if (tokenInput) tokenInput.value = getAdminToken();
+
+                    // System health polling
+                    fetchHealth();
+                    setInterval(fetchHealth, 5000);
+
+                    // Encoding progress polling
+                    pollEncodingStatus();
+                    setInterval(pollEncodingStatus, 3000);
+
+                    // Drag & Drop
+                    const dropZone = document.getElementById('drop-zone');
+                    const fileInput = document.getElementById('file-input');
+
+                    dropZone.addEventListener('click', () => fileInput.click());
+                    fileInput.addEventListener('change', handleFiles);
+
+                    // Prevent default drag behaviors on the window to avoid browser opening file
+                    ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
+                        window.addEventListener(eventName, preventDefaults, false);
+                        dropZone.addEventListener(eventName, preventDefaults, false);
+                    });
+
+                    function preventDefaults(e) {
+                        e.preventDefault();
+                        e.stopPropagation();
+                    }
+
+                    // Highlight drop zone
+                    ['dragenter', 'dragover'].forEach(eventName => {
+                        dropZone.addEventListener(eventName, highlight, false);
+                    });
+
+                    ['dragleave', 'drop'].forEach(eventName => {
+                        dropZone.addEventListener(eventName, unhighlight, false);
+                    });
+
+                    function highlight(e) {
+                        dropZone.classList.add('border-white', 'bg-[#222]');
+                    }
+
+                    function unhighlight(e) {
+                        dropZone.classList.remove('border-white', 'bg-[#222]');
+                    }
+
+                    dropZone.addEventListener('drop', handleDrop, false);
+
+                    function handleDrop(e) {
+                        const dt = e.dataTransfer;
+                        const files = dt.files;
+                        handleFiles({ files: files });
+                    }
+                });
+
+                // --- UTILS ---
+                function log(message) {
+                    const miniLog = document.getElementById('mini-log');
+                    if (!miniLog) return;
+                    const entry = document.createElement('div');
+                    entry.className = 'text-[#888]';
+                    entry.textContent = `[${new Date().toLocaleTimeString()}] ${message}`;
+                    miniLog.appendChild(entry);
+                    miniLog.scrollTop = miniLog.scrollHeight;
+                }
+
+                function saveAdminToken() {
+                    const input = document.getElementById('admin-token-input');
+                    const token = (input?.value || '').trim();
+                    setAdminToken(token);
+                    log(token ? 'Admin token saved' : 'Admin token cleared');
+                    showSaved();
+                }
+
+                function clearAdminToken() {
+                    const input = document.getElementById('admin-token-input');
+                    if (input) input.value = '';
+                    setAdminToken('');
+                    log('Admin token cleared');
+                    showSaved();
+                }
+
+                function switchTab(tab) {
+                    currentTab = tab;
+
+                    // Update Buttons
+                    const btnActive = document.getElementById('tab-active');
+                    const btnCompleted = document.getElementById('tab-completed');
+
+                    if (tab === 'active') {
+                        btnActive.className = "flex-1 py-3 text-[11px] font-bold uppercase tracking-wider text-white border-b-2 border-blue-500 bg-[#222]";
+                        btnCompleted.className = "flex-1 py-3 text-[11px] font-bold uppercase tracking-wider text-[#666] hover:text-[#aaa] border-b-2 border-transparent";
+                    } else {
+                        btnActive.className = "flex-1 py-3 text-[11px] font-bold uppercase tracking-wider text-[#666] hover:text-[#aaa] border-b-2 border-transparent";
+                        btnCompleted.className = "flex-1 py-3 text-[11px] font-bold uppercase tracking-wider text-white border-b-2 border-blue-500 bg-[#222]";
+                    }
+
+                    renderList();
+                }
+
+                async function handleFiles(filesOrEvent) {
+                    const files = Array.from(filesOrEvent.files || filesOrEvent.target.files || []);
+                    if (!files.length) return;
+
+                    // Categorize files by extension
+                    const VIDEO_EXTS = ['.mp4', '.mov', '.mkv', '.avi', '.webm', '.m4v', '.wmv'];
+                    const SRT_EXTS = ['.srt'];
+                    const TRANSCRIPT_EXTS = ['.txt', '.json'];
+
+                    const videoFiles = files.filter(f => VIDEO_EXTS.some(ext => f.name.toLowerCase().endsWith(ext)));
+                    const srtFiles = files.filter(f => SRT_EXTS.some(ext => f.name.toLowerCase().endsWith(ext)));
+                    const transcriptFiles = files.filter(f => TRANSCRIPT_EXTS.some(ext => f.name.toLowerCase().endsWith(ext)));
+
+                    // Determine workflow mode
+                    let mode = 'full_pipeline';
+                    let description = '';
+                    let action = '';
+
+                    if (videoFiles.length > 0 && srtFiles.length > 0) {
+                        mode = 'quick_burn';
+                        description = `Video + SRT detected. Skip straight to burning subtitles.`;
+                        action = 'Skip to Finalize → Burn';
+                    } else if (videoFiles.length > 0 && transcriptFiles.length > 0) {
+                        mode = 'skip_transcription';
+                        description = `Video + Transcript detected. Use provided transcript.`;
+                        action = 'Skip Transcription → Translate → Burn';
+                    } else if (srtFiles.length > 0 && videoFiles.length === 0) {
+                        mode = 'srt_update';
+                        const srtName = srtFiles[0].name.replace('.srt', '');
+                        description = `SRT file only. Update subtitles for existing job.`;
+                        action = `Update ${srtName} → Re-Burn`;
+                    } else if (videoFiles.length > 0) {
+                        mode = 'full_pipeline';
+                        description = `Video file detected. Full processing pipeline.`;
+                        action = 'Transcribe → Translate → Review → Burn';
+                    } else {
+                        showToast('Unsupported Files', 'Please drop video files (.mp4, .mov) or SRT files (.srt)', 'warning');
+                        return;
+                    }
+
+                    // Show confirmation modal with detected mode
+                    const fileList = files.map(f => f.name).join(', ');
+                    showFileDropModal({
+                        files: files,
+                        videoFiles: videoFiles,
+                        srtFiles: srtFiles,
+                        transcriptFiles: transcriptFiles,
+                        mode: mode,
+                        fileList: fileList,
+                        description: description,
+                        action: action
+                    });
+                }
+
+                function showFileDropModal(data) {
+                    // Create or update modal
+                    let modal = document.getElementById('file-drop-modal');
+                    if (!modal) {
+                        modal = document.createElement('div');
+                        modal.id = 'file-drop-modal';
+                        modal.className = 'fixed inset-0 bg-black/80 z-50 flex items-center justify-center';
+                        document.body.appendChild(modal);
+                    }
+
+                    const modeIcons = {
+                        'full_pipeline': `<svg class="w-8 h-8" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M3.375 19.5h17.25m-17.25 0a1.125 1.125 0 01-1.125-1.125M3.375 19.5h1.5C5.496 19.5 6 18.996 6 18.375m-3.75 0V5.625m0 12.75v-1.5c0-.621.504-1.125 1.125-1.125m18.375 2.625V5.625m0 12.75c0 .621-.504 1.125-1.125 1.125m1.125-1.125v-1.5c0-.621-.504-1.125-1.125-1.125m0 3.75h-1.5A1.125 1.125 0 0118 18.375M20.625 4.5H3.375m17.25 0c.621 0 1.125.504 1.125 1.125M20.625 4.5h-1.5C18.504 4.5 18 5.004 18 5.625m3.75 0v1.5c0 .621-.504 1.125-1.125 1.125M3.375 4.5c-.621 0-1.125.504-1.125 1.125M3.375 4.5h1.5C5.496 4.5 6 5.004 6 5.625m-3.75 0v1.5c0 .621.504 1.125 1.125 1.125m0 0h1.5m-1.5 0c-.621 0-1.125.504-1.125 1.125v1.5c0 .621.504 1.125 1.125 1.125m1.5-3.75C5.496 8.25 6 7.746 6 7.125v-1.5M4.875 8.25C5.496 8.25 6 8.754 6 9.375v1.5m0-5.25v5.25m0-5.25C6 5.004 6.504 4.5 7.125 4.5h9.75c.621 0 1.125.504 1.125 1.125m1.125 2.625h1.5m-1.5 0A1.125 1.125 0 0118 7.125v-1.5m1.125 2.625c-.621 0-1.125.504-1.125 1.125v1.5m2.625-2.625c.621 0 1.125.504 1.125 1.125v1.5c0 .621-.504 1.125-1.125 1.125M18 5.625v5.25M7.125 12h9.75m-9.75 0A1.125 1.125 0 016 10.875M7.125 12C6.504 12 6 12.504 6 13.125m0-2.25C6 11.496 5.496 12 4.875 12M18 10.875c0 .621-.504 1.125-1.125 1.125M18 10.875c0 .621.504 1.125 1.125 1.125m-2.25 0c.621 0 1.125.504 1.125 1.125m-12 5.25v-5.25m0 5.25c0 .621.504 1.125 1.125 1.125h9.75c.621 0 1.125-.504 1.125-1.125m-12 0v-1.5c0-.621-.504-1.125-1.125-1.125M18 18.375v-5.25m0 5.25v-1.5c0-.621.504-1.125 1.125-1.125M18 13.125v1.5c0 .621.504 1.125 1.125 1.125M18 13.125c0-.621.504-1.125 1.125-1.125M6 13.125v1.5c0 .621-.504 1.125-1.125 1.125M6 13.125C6 12.504 5.496 12 4.875 12m-1.5 0h1.5m14.25 0h1.5"/></svg>`,
+                        'quick_burn': `<svg class="w-8 h-8" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M15.362 5.214A8.252 8.252 0 0112 21 8.25 8.25 0 016.038 7.048 8.287 8.287 0 009 9.6a8.983 8.983 0 013.361-6.867 8.21 8.21 0 003 2.48z"/><path stroke-linecap="round" stroke-linejoin="round" d="M12 18a3.75 3.75 0 00.495-7.467 5.99 5.99 0 00-1.925 3.546 5.974 5.974 0 01-2.133-1A3.75 3.75 0 0012 18z"/></svg>`,
+                        'skip_transcription': `<svg class="w-8 h-8" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m0 12.75h7.5m-7.5 3H12M10.5 2.25H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z"/></svg>`,
+                        'srt_update': `<svg class="w-8 h-8" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182m0-4.991v4.99"/></svg>`
+                    };
+
+                    modal.innerHTML = `
+                        <div class="bg-[#1a1a1a] border border-[#333] rounded-xl p-6 max-w-md w-full mx-4 shadow-2xl">
+                            <div class="flex items-center gap-3 mb-4">
+                                <span class="text-3xl">${modeIcons[data.mode] || '<svg class="w-8 h-8" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M2.25 12.75V12A2.25 2.25 0 014.5 9.75h15A2.25 2.25 0 0121.75 12v.75m-8.69-6.44l-2.12-2.12a1.5 1.5 0 00-1.061-.44H4.5A2.25 2.25 0 002.25 6v12a2.25 2.25 0 002.25 2.25h15A2.25 2.25 0 0021.75 18V9a2.25 2.25 0 00-2.25-2.25h-5.379a1.5 1.5 0 01-1.06-.44z"/></svg>'}</span>
+                                <h3 class="text-lg font-bold text-white">Files Detected</h3>
+                            </div>
+                            
+                            <div class="bg-[#222] rounded-lg p-3 mb-4 text-sm text-[#aaa] font-mono max-h-24 overflow-auto">
+                                ${data.files.map(f => `<div>• ${f.name}</div>`).join('')}
+                            </div>
+                            
+                            <p class="text-sm text-[#888] mb-2">${data.description}</p>
+                            <p class="text-sm font-medium text-emerald-400 mb-6">Action: ${data.action}</p>
+                            
+                            <div class="flex gap-3">
+                                <button onclick="closeFileDropModal()" 
+                                    class="flex-1 py-2.5 rounded-lg text-sm font-medium bg-[#333] hover:bg-[#444] text-[#aaa] hover:text-white transition-colors">
+                                    Cancel
+                                </button>
+                                <button onclick="processDroppedFiles()" 
+                                    class="flex-1 py-2.5 rounded-lg text-sm font-medium bg-emerald-600 hover:bg-emerald-500 text-white transition-colors">
+                                    Start Processing
+                                </button>
+                            </div>
+                        </div>
+                    `;
+
+                    modal.classList.remove('hidden');
+                    // Store data for processing
+                    window._pendingDropData = data;
+                }
+
+                function closeFileDropModal() {
+                    const modal = document.getElementById('file-drop-modal');
+                    if (modal) modal.classList.add('hidden');
+                    window._pendingDropData = null;
+                }
+
+                async function processDroppedFiles() {
+                    const data = window._pendingDropData;
+                    if (!data) return;
+
+                    closeFileDropModal();
+
+                    const formData = new FormData();
+                    formData.append('mode', data.mode);
+
+                    // Add all files
+                    data.files.forEach((file, i) => {
+                        formData.append(`file_${i}`, file);
+                    });
+
+                    try {
+                        showToast('Processing', `Uploading ${data.files.length} file(s)...`, 'info', 3000);
+
+                        const res = await fetch('/api/smart_upload', {
+                            method: 'POST',
+                            headers: { ...adminHeaders() },
+                            body: formData
+                        });
+                        const result = await res.json();
+
+                        if (result.success) {
+                            showToast('Upload Complete', result.message || 'Files processed successfully', 'success', 5000);
+                            fetchJobs();
+                        } else {
+                            showToast('Upload Failed', result.error || 'Unknown error', 'error', 8000);
+                        }
+                    } catch (err) {
+                        showToast('Upload Error', err.message, 'error', 8000);
+                    }
+                }
+
+
+                async function fetchJobs() {
+                    try {
+                        const res = await fetch('/api/jobs');
+                        jobsData = await res.json();
+                        renderList();
+                        if (selectedStem) updateInspector();
+                    } catch (err) {
+                        console.error(err);
+                    }
+                }
+
+                function formatAge(seconds) {
+                    if (seconds === null || seconds === undefined) return '—';
+                    if (seconds < 60) return `${seconds.toFixed(0)}s`;
+                    const mins = Math.floor(seconds / 60);
+                    const rem = Math.floor(seconds % 60);
+                    return `${mins}m ${rem}s`;
+                }
+
+                async function fetchHealth() {
+                    try {
+                        const res = await fetch('/api/health');
+                        const h = await res.json();
+
+                        const mgrEl = document.getElementById('sys-manager');
+                        const ssdEl = document.getElementById('sys-ssd');
+                        const diskEl = document.getElementById('sys-disk');
+
+                        const mgrAge = h?.heartbeats?.omega_manager_age_seconds;
+                        if (mgrEl) {
+                            const online = typeof mgrAge === 'number' && mgrAge < 10;
+                            mgrEl.textContent = online ? `ONLINE (${formatAge(mgrAge)})` : `OFFLINE (${formatAge(mgrAge)})`;
+                            mgrEl.className = `font-mono ${online ? 'text-emerald-400' : 'text-red-400'}`;
+                        }
+
+                        if (ssdEl) {
+                            const ready = !!h?.storage_ready;
+                            ssdEl.textContent = ready ? 'READY' : 'NOT READY';
+                            ssdEl.className = `font-mono ${ready ? 'text-emerald-400' : 'text-red-400'}`;
+                        }
+
+                        if (diskEl) {
+                            const free = h?.disk_free_gb;
+                            if (typeof free === 'number') {
+                                diskEl.textContent = `${free.toFixed(1)} GB`;
+                                diskEl.className = `font-mono ${free < 20 ? 'text-amber-400' : 'text-[#aaa]'}`;
+                            } else {
+                                diskEl.textContent = '—';
+                                diskEl.className = 'font-mono text-[#666]';
+                            }
+                        }
+                    } catch (err) {
+                        const mgrEl = document.getElementById('sys-manager');
+                        const ssdEl = document.getElementById('sys-ssd');
+                        const diskEl = document.getElementById('sys-disk');
+                        if (mgrEl) { mgrEl.textContent = 'ERROR'; mgrEl.className = 'font-mono text-red-400'; }
+                        if (ssdEl) { ssdEl.textContent = 'ERROR'; ssdEl.className = 'font-mono text-red-400'; }
+                        if (diskEl) { diskEl.textContent = 'ERROR'; diskEl.className = 'font-mono text-red-400'; }
+                    }
+                }
+
+                function calculateElapsed(job) {
+                    if (!job.meta || !job.meta.ingest_time) return "--:--";
+                    const start = new Date(job.meta.ingest_time);
+
+                    // FIX: Use burn_end_time if available to stop the timer
+                    let end = new Date();
+                    if (job.meta.burn_end_time) {
+                        end = new Date(job.meta.burn_end_time);
+                    } else if (job.meta.burn_completed_at) {
+                        end = new Date(job.meta.burn_completed_at);
+                    } else if (job.stage === 'COMPLETED' || job.stage === 'PUBLISHED') {
+                        // Fallback if burn_end_time is missing but job is done
+                        end = new Date(job.updated_at);
+                    }
+
+                    const diffMs = end - start;
+                    const diffMins = Math.floor(diffMs / 60000);
+                    const diffSecs = Math.floor((diffMs % 60000) / 1000);
+                    return `${diffMins}m ${diffSecs}s`;
+                }
+
+                let selectedJobId = null;
+
+                function selectJob(jobId) {
+                    console.log(`Selected job: ${jobId}`);
+                    selectedJobId = jobId;
+                    selectedStem = jobId; // Sync selectedStem
+
+                    // Remove selected-row from previous selection
+                    document.querySelectorAll('#job-list tr').forEach(row => {
+                        row.classList.remove('selected-row');
+                    });
+
+                    // Add selected-row to current selection
+                    const selectedRow = document.querySelector(`#job-list tr[onclick*="${jobId}"]`);
+                    if (selectedRow) {
+                        selectedRow.classList.add('selected-row');
+                    }
+
+                    // Show inspector content and hide empty state
+                    document.getElementById('inspector-empty').classList.add('hidden');
+                    document.getElementById('inspector-content').classList.remove('hidden');
+
+                    updateInspector();
+                }
+
+                function formatDuration(seconds) {
+                    if (seconds === null || seconds === undefined || isNaN(seconds)) return "--";
+                    const total = Math.max(0, Math.floor(seconds));
+                    const h = Math.floor(total / 3600);
+                    const m = Math.floor((total % 3600) / 60);
+                    const s = total % 60;
+                    if (h > 0) return `${h}h ${m}m ${s}s`;
+                    if (m > 0) return `${m}m ${s}s`;
+                    return `${s}s`;
+                }
+
+                function formatTime(iso) {
+                    if (!iso) return "--";
+                    const d = new Date(iso);
+                    if (isNaN(d.getTime())) return "--";
+                    return d.toLocaleTimeString();
+                }
+
+                function parseIso(iso) {
+                    if (!iso) return null;
+                    const d = new Date(iso);
+                    if (isNaN(d.getTime())) return null;
+                    return d;
+                }
+
+                function renderTimeline(entries, containerId, emptyText) {
+                    const container = document.getElementById(containerId);
+                    if (!container) return;
+                    if (!Array.isArray(entries) || entries.length === 0) {
+                        container.innerHTML = `<div class="text-xs text-[#555]">${emptyText}</div>`;
+                        return;
+                    }
+                    const now = new Date();
+                    container.innerHTML = entries.map(entry => {
+                        const stage = (entry.stage || "UNKNOWN").toString().replace(/^CLOUD_/, "");
+                        const started = parseIso(entry.started_at);
+                        const ended = parseIso(entry.ended_at);
+                        const duration = started ? ((ended || now) - started) / 1000 : null;
+                        const running = !ended;
+                        const label = running ? "▶" : "•";
+                        const rowClass = running ? "text-white" : "text-[#aaa]";
+                        return `
+                            <div class="flex items-center justify-between gap-2 ${rowClass}">
+                                <span>${label} ${stage}</span>
+                                <span class="text-[#666]">${formatDuration(duration)}</span>
+                            </div>
+                        `;
+                    }).join('');
+                }
+
+                function renderStatusTimeline(entries, containerId, maxItems = 6) {
+                    const container = document.getElementById(containerId);
+                    if (!container) return;
+                    if (!Array.isArray(entries) || entries.length === 0) {
+                        container.innerHTML = `<div class="text-xs text-[#555]">No status history yet.</div>`;
+                        return;
+                    }
+                    const slice = entries.slice(-maxItems).reverse();
+                    container.innerHTML = slice.map(entry => {
+                        const status = (entry.status || "").toString();
+                        const time = formatTime(entry.at);
+                        return `
+                            <div class="flex items-center justify-between gap-2">
+                                <span class="text-[#888] truncate">${status}</span>
+                                <span class="text-[#555]">${time}</span>
+                            </div>
+                        `;
+                    }).join('');
+                }
+
+                // Toggle timeline visibility
+                function toggleTimeline(type) {
+                    const listId = type === 'stage' ? 'monitor-stage-list' :
+                        type === 'cloud' ? 'monitor-cloud-list' : 'monitor-status-list';
+                    const toggleId = `timeline-${type}-toggle`;
+                    const list = document.getElementById(listId);
+                    const toggle = document.getElementById(toggleId);
+                    if (!list || !toggle) return;
+
+                    const isHidden = list.classList.contains('hidden');
+                    if (isHidden) {
+                        list.classList.remove('hidden');
+                        toggle.innerText = '▲';
+                    } else {
+                        list.classList.add('hidden');
+                        toggle.innerText = '▼';
+                    }
+                }
+
+                function updateMonitoring(job, meta) {
+                    const stageTimeline = Array.isArray(meta?.stage_timeline) ? meta.stage_timeline : [];
+                    const cloudTimeline = Array.isArray(meta?.cloud_stage_timeline) ? meta.cloud_stage_timeline : [];
+                    const statusTimeline = Array.isArray(meta?.status_timeline) ? meta.status_timeline : [];
+                    const cloudProgress = meta?.cloud_progress || null;
+
+                    renderTimeline(stageTimeline, "monitor-stage-list", "No pipeline data yet.");
+                    renderTimeline(cloudTimeline, "monitor-cloud-list", "No cloud activity yet.");
+                    renderStatusTimeline(statusTimeline, "monitor-status-list");
+
+                    // Update summary counts
+                    const stageSummary = document.getElementById("timeline-stage-summary");
+                    if (stageSummary) {
+                        stageSummary.innerText = stageTimeline.length > 0 ? `${stageTimeline.length} steps` : '';
+                    }
+
+                    const cloudSummaryEl = document.getElementById("monitor-cloud-summary");
+                    if (cloudSummaryEl) {
+                        if (cloudProgress && (cloudProgress.status || cloudProgress.progress !== null)) {
+                            const prog = cloudProgress.progress !== null && cloudProgress.progress !== undefined
+                                ? `${Math.round(cloudProgress.progress)}%`
+                                : "--";
+                            const status = cloudProgress.status || "Cloud running";
+                            const updated = formatTime(cloudProgress.updated_at);
+                            cloudSummaryEl.innerText = `${status} • ${prog} • Updated ${updated}`;
+                        } else if (cloudTimeline.length > 0) {
+                            cloudSummaryEl.innerText = `${cloudTimeline.length} steps`;
+                        } else {
+                            cloudSummaryEl.innerText = "--";
+                        }
+                    }
+
+                    const totalEl = document.getElementById("monitor-total");
+                    if (totalEl) {
+                        let total = null;
+                        if (stageTimeline.length > 0) {
+                            const first = parseIso(stageTimeline[0]?.started_at);
+                            const last = parseIso(stageTimeline[stageTimeline.length - 1]?.ended_at) || new Date();
+                            if (first) total = (last - first) / 1000;
+                        }
+                        const updated = formatTime(job.updated_at);
+                        totalEl.innerText = `${formatDuration(total)} • Updated ${updated}`;
+                    }
+                }
+
+                function updateInspector() {
+                    const job = jobsData.find(j => j.file_stem === selectedJobId);
+                    if (!job) return;
+
+                    const stageUpper = (job.stage || '').toUpperCase();
+                    const statusText = job.status || '';
+                    const statusLower = statusText.toLowerCase();
+                    const meta = job.meta || {};
+
+                    document.getElementById('insp-title').innerText = job.file_stem;
+                    document.getElementById('insp-id').innerText = `Stage: ${stageUpper || '—'} • ${statusText}`;
+
+                    // Status Badge
+                    document.getElementById('insp-status-text').innerText = statusText;
+                    const statusDot = document.getElementById('insp-status-dot');
+                    const halted = !!meta.halted || stageUpper === 'DEAD';
+                    const done = stageUpper === 'COMPLETED' || statusLower.includes('done') || statusLower.includes('completed');
+                    const waitingApproval = statusLower.includes('waiting for burn approval') || statusLower.includes('pending approval');
+                    if (halted) statusDot.className = "w-2 h-2 rounded-full bg-red-500";
+                    else if (done) statusDot.className = "w-2 h-2 rounded-full bg-emerald-500";
+                    else if (waitingApproval) statusDot.className = "w-2 h-2 rounded-full bg-amber-500 animate-pulse";
+                    else statusDot.className = "w-2 h-2 rounded-full bg-blue-500 animate-pulse";
+
+                    // Stepper Logic
+                    const progress = job.progress;
+                    updateStep('ingest', progress >= 30, progress < 30 && progress > 0);
+                    updateStep('translate', progress >= 70, progress < 70 && progress >= 30);
+                    updateStep('burn', progress >= 100, progress < 100 && progress >= 70);
+
+                    // Update Inputs (Only if not focused to avoid jitter)
+                    if (document.activeElement.id !== 'insp-lang') document.getElementById('insp-lang').value = job.target_language || 'is';
+                    if (document.activeElement.id !== 'insp-profile') document.getElementById('insp-profile').value = job.program_profile || 'standard';
+                    if (document.activeElement.id !== 'insp-style') document.getElementById('insp-style').value = job.subtitle_style || 'Classic';
+
+                    // Mode Buttons
+                    const mode = meta?.mode || 'AUTO';
+                    document.getElementById('btn-mode-auto').className = `flex-1 py-2 text-[11px] font-medium rounded-md transition-all ${mode === 'AUTO' ? 'bg-white text-black shadow-sm' : 'text-[#666] hover:text-white hover:bg-[#333]'}`;
+                    document.getElementById('btn-mode-review').className = `flex-1 py-2 text-[11px] font-medium rounded-md transition-all ${mode === 'REVIEW' ? 'bg-white text-black shadow-sm' : 'text-[#666] hover:text-white hover:bg-[#333]'}`;
+
+                    // Approve Button
+                    const btnApprove = document.getElementById('btn-approve');
+                    if (waitingApproval) {
+                        btnApprove.classList.remove('hidden');
+                        btnApprove.classList.add('animate-pulse');
+                    } else {
+                        btnApprove.classList.add('hidden');
+                        btnApprove.classList.remove('animate-pulse');
+                    }
+
+                    // Locking Logic
+                    const isLocked = ['INGEST', 'TRANSLATING', 'REVIEWING', 'FINALIZING', 'BURNING'].includes(stageUpper);
+                    updateInspectorState(isLocked);
+
+                    // Output
+                    const outputDiv = document.getElementById('output-section');
+                    const outputPathEl = document.getElementById('output-path');
+                    const downloadBtn = document.getElementById('btn-download-output');
+                    const outputPath = meta.final_output || '';
+                    if (outputPath || stageUpper === 'COMPLETED') {
+                        outputDiv.classList.remove('hidden');
+                        outputPathEl.innerText = outputPath || '(not recorded yet)';
+                        const token = getAdminToken();
+                        const qp = token ? `?admin_token=${encodeURIComponent(token)}` : '';
+                        downloadBtn.href = `/api/output/${encodeURIComponent(job.file_stem)}${qp}`;
+                    } else {
+                        outputDiv.classList.add('hidden');
+                    }
+
+                    // Error / Halt box
+                    const errorBox = document.getElementById('error-box');
+                    const errorTextEl = document.getElementById('error-text');
+                    const haltBadge = document.getElementById('halt-badge');
+                    const unhaltBtn = document.getElementById('btn-unhalt');
+
+                    const lastError = meta.last_error || (halted ? statusText : '');
+                    if (lastError) {
+                        errorBox.classList.remove('hidden');
+                        errorTextEl.innerText = lastError;
+                    } else {
+                        errorBox.classList.add('hidden');
+                    }
+
+                    if (halted) {
+                        haltBadge.classList.remove('hidden');
+                        unhaltBtn.classList.remove('hidden');
+                    } else {
+                        haltBadge.classList.add('hidden');
+                        unhaltBtn.classList.add('hidden');
+                    }
+
+                    // Re-Burn Button (Show if done)
+                    const reburnBtn = document.getElementById('btn-reburn');
+                    if (done) {
+                        reburnBtn.classList.remove('hidden');
+                    } else {
+                        reburnBtn.classList.add('hidden');
+                    }
+
+                    // Quality Report Logic
+                    const reportDiv = document.getElementById('quality-report');
+                    if (job.editor_report) {
+                        try {
+                            const report = JSON.parse(job.editor_report);
+                            reportDiv.classList.remove('hidden');
+
+                            // Rating Color
+                            const rating = report.rating || 0;
+                            const ratingEl = document.getElementById('qr-rating');
+                            ratingEl.innerText = rating + "/10";
+                            if (rating >= 9) ratingEl.className = "px-2 py-1 rounded bg-emerald-500/20 text-emerald-400 text-xs font-bold";
+                            else if (rating >= 7) ratingEl.className = "px-2 py-1 rounded bg-yellow-500/20 text-yellow-400 text-xs font-bold";
+                            else ratingEl.className = "px-2 py-1 rounded bg-red-500/20 text-red-400 text-xs font-bold";
+
+                            document.getElementById('qr-tier').innerText = report.quality_tier || "Unknown";
+                            document.getElementById('qr-summary').innerText = report.summary || "No summary available.";
+
+                            // Issues
+                            const issuesContainer = document.getElementById('qr-issues-container');
+                            const issuesList = document.getElementById('qr-issues');
+                            if (report.major_issues && report.major_issues.length > 0) {
+                                issuesContainer.classList.remove('hidden');
+                                issuesList.innerHTML = report.major_issues.map(i => `<li>${i}</li>`).join('');
+                            } else {
+                                issuesContainer.classList.add('hidden');
+                            }
+
+                            // Suggestions
+                            const suggContainer = document.getElementById('qr-suggestions-container');
+                            if (report.suggestions) {
+                                suggContainer.classList.remove('hidden');
+                                document.getElementById('qr-suggestions').innerText = report.suggestions;
+                            } else {
+                                suggContainer.classList.add('hidden');
+                            }
+
+                        } catch (e) {
+                            console.error("Failed to parse editor report", e);
+                            reportDiv.classList.add('hidden');
+                        }
+                    } else {
+                        reportDiv.classList.add('hidden');
+                    }
+
+                    // Broadcast QA (Caps)
+                    const qaDiv = document.getElementById('broadcast-qa');
+                    const qaCaps = meta?.qa_caps || null;
+                    const fullCaps = qaCaps?.full_caps || 0;
+                    const mostlyCaps = qaCaps?.mostly_caps || 0;
+                    const totalCapsBlocks = qaCaps?.total || 0;
+                    if (qaCaps && (fullCaps > 0 || mostlyCaps > 0)) {
+                        qaDiv.classList.remove('hidden');
+
+                        const badge = document.getElementById('qa-caps-badge');
+                        const issues = fullCaps + mostlyCaps;
+                        badge.innerText = totalCapsBlocks ? `${issues}/${totalCapsBlocks}` : `${issues}`;
+                        if (fullCaps > 0) {
+                            badge.className = "px-2 py-1 rounded bg-red-500/20 text-red-300 text-xs font-bold";
+                        } else {
+                            badge.className = "px-2 py-1 rounded bg-yellow-500/20 text-yellow-300 text-xs font-bold";
+                        }
+
+                        const msg = `Caps warning: ${fullCaps} ALL CAPS + ${mostlyCaps} mostly-caps blocks detected. Use Retry Review → Retry Finalize → Force Burn to regenerate.`;
+                        document.getElementById('qa-caps-text').innerText = msg;
+
+                        const samplesContainer = document.getElementById('qa-caps-samples-container');
+                        const samplesList = document.getElementById('qa-caps-samples');
+                        const samples = qaCaps?.samples || [];
+                        if (Array.isArray(samples) && samples.length > 0) {
+                            samplesContainer.classList.remove('hidden');
+                            samplesList.innerHTML = '';
+                            samples.forEach(sample => {
+                                const li = document.createElement('li');
+                                li.textContent = String(sample);
+                                samplesList.appendChild(li);
+                            });
+                        } else {
+                            samplesContainer.classList.add('hidden');
+                        }
+                    } else {
+                        qaDiv.classList.add('hidden');
+                    }
+
+                    // Subtitle QA
+                    const srtQaDiv = document.getElementById('subtitle-qa');
+                    const qaSrt = meta?.qa_srt || null;
+                    if (qaSrt) {
+                        srtQaDiv.classList.remove('hidden');
+
+                        const cps17 = qaSrt?.high_cps_17 || 0;
+                        const cps20 = qaSrt?.high_cps_20 || 0;
+                        const shortDur = qaSrt?.short_duration || 0;
+                        const longDur = qaSrt?.long_duration || 0;
+                        const longLines = qaSrt?.long_lines || 0;
+                        const dangling = qaSrt?.dangling || 0;
+                        const totalBlocks = qaSrt?.total || 0;
+
+                        document.getElementById('qa-srt-cps17').innerText = cps17;
+                        document.getElementById('qa-srt-cps20').innerText = cps20;
+                        document.getElementById('qa-srt-short').innerText = shortDur;
+                        document.getElementById('qa-srt-long').innerText = longDur;
+                        document.getElementById('qa-srt-longlines').innerText = longLines;
+                        document.getElementById('qa-srt-dangling').innerText = dangling;
+
+                        const issueCount = cps20 + longDur + shortDur + longLines + dangling;
+                        const badge = document.getElementById('qa-srt-badge');
+                        badge.innerText = totalBlocks ? `${issueCount}/${totalBlocks}` : `${issueCount}`;
+                        if (cps20 > 0 || longDur > 0) {
+                            badge.className = "px-2 py-1 rounded bg-red-500/20 text-red-300 text-xs font-bold";
+                        } else if (issueCount > 0) {
+                            badge.className = "px-2 py-1 rounded bg-yellow-500/20 text-yellow-300 text-xs font-bold";
+                        } else {
+                            badge.className = "px-2 py-1 rounded bg-emerald-500/20 text-emerald-300 text-xs font-bold";
+                        }
+
+                        const maxCps = qaSrt?.max_cps || 0;
+                        const maxDur = qaSrt?.max_duration || 0;
+                        document.getElementById('qa-srt-note').innerText = `Max CPS: ${maxCps} | Max duration: ${maxDur}s`;
+                    } else {
+                        srtQaDiv.classList.add('hidden');
+                    }
+
+                    // Monitoring
+                    updateMonitoring(job, meta);
+                }
+
+                function updateStep(id, isComplete, isActive) {
+                    const dot = document.getElementById(`step-${id}-dot`);
+                    const inner = document.getElementById(`step-${id}-inner`);
+                    const text = document.getElementById(`step-${id}-text`);
+
+                    if (isComplete) {
+                        dot.className = "absolute -left-[13px] w-6 h-6 rounded-full bg-emerald-500/20 border border-emerald-500 flex items-center justify-center z-10";
+                        inner.className = "w-2 h-2 rounded-full bg-emerald-500";
+                        text.className = "text-xs text-white font-medium ml-6";
+                    } else if (isActive) {
+                        dot.className = "absolute -left-[13px] w-6 h-6 rounded-full bg-blue-500/20 border border-blue-500 flex items-center justify-center z-10 animate-pulse";
+                        inner.className = "w-2 h-2 rounded-full bg-blue-500";
+                        text.className = "text-xs text-white font-medium ml-6";
+                    } else {
+                        dot.className = "absolute -left-[13px] w-6 h-6 rounded-full bg-[#1a1a1a] border border-[#333] flex items-center justify-center z-10";
+                        inner.className = "w-1.5 h-1.5 rounded-full bg-[#444]";
+                        text.className = "text-xs text-[#666] ml-6";
+                    }
+                }
+
+                async function runJobAction(action, extra = {}, requireJob = true) {
+                    if (requireJob && !selectedJobId) return null;
+
+                    const payload = { action, ...extra };
+                    if (requireJob) payload.file_stem = selectedJobId;
+
+                    try {
+                        const data = await postJson('/api/action', payload);
+                        if (data?.success) log(data.message || `${action}: OK`);
+                        else log(`Error: ${data?.error || data?.message || 'Unknown error'}`);
+                        fetchJobs();
+                        return data;
+                    } catch (err) {
+                        log(`Network Error: ${err}`);
+                        return null;
+                    }
+                }
+
+                async function updateJobSetting(key, value) {
+                    const map = {
+                        target_language: ['set_language', 'target_language'],
+                        program_profile: ['set_profile', 'program_profile'],
+                        subtitle_style: ['set_style', 'subtitle_style'],
+                    };
+                    const entry = map[key];
+                    if (!entry) return;
+                    const [action, param] = entry;
+                    const data = await runJobAction(action, { [param]: value }, true);
+                    if (data?.success) showSaved();
+                }
+
+                async function setMode(mode) {
+                    const data = await runJobAction('set_mode', { mode }, true);
+                    if (data?.success) showSaved();
+                }
+
+                async function approveBurn() {
+                    await runJobAction('approve_burn', {}, true);
+                }
+
+                async function resetReview() {
+                    await runJobAction('reset_review', {}, true);
+                }
+
+                async function forceBurn() {
+                    if (!selectedJobId) return;
+                    if (!confirm(`Force burn ${selectedJobId}? This will re-render the burned video.`)) return;
+
+                    const stem = selectedJobId;
+
+                    // Show immediate visual feedback
+                    showToast('🔥 Burn Started', `Starting burn for ${stem}...`, 'info', 10000);
+                    showEncodingProgress(stem, 'Preparing...', 5, 'Starting...');
+                    document.getElementById('encoding-banner').classList.add('show');
+
+                    const result = await runJobAction('force_burn', {}, true);
+
+                    if (!result?.success) {
+                        hideEncodingProgress();
+                        showToast('❌ Burn Failed', result?.error || 'Unknown error', 'error', 8000);
+                        return;
+                    }
+
+                    // Poll for completion or failure (every 2s for up to 2 minutes)
+                    let attempts = 0;
+                    const maxAttempts = 60;
+
+                    const pollStatus = setInterval(async () => {
+                        attempts++;
+                        try {
+                            const res = await fetch('/api/jobs');
+                            const jobs = await res.json();
+                            const job = jobs.find(j => j.file_stem === stem);
+
+                            if (job) {
+                                const status = (job.status || '').toLowerCase();
+                                const stage = (job.stage || '').toUpperCase();
+
+                                // Check for failure
+                                if (status.includes('failed') || status.includes('error')) {
+                                    clearInterval(pollStatus);
+                                    hideEncodingProgress();
+                                    showToast('❌ Burn Failed', job.status, 'error', 10000);
+                                    fetchJobs();
+                                    return;
+                                }
+
+                                // Check for completion
+                                if (stage === 'COMPLETED' && status.includes('done')) {
+                                    clearInterval(pollStatus);
+                                    hideEncodingProgress();
+                                    showToast('✅ Burn Complete', `${stem} finished successfully!`, 'success', 5000);
+                                    fetchJobs();
+                                    return;
+                                }
+
+                                // Update progress display
+                                if (stage === 'BURNING') {
+                                    showEncodingProgress(stem, 'Burning...', job.progress || 95, 'Encoding...');
+                                }
+                            }
+                        } catch (e) {
+                            console.error('Poll error:', e);
+                        }
+
+                        if (attempts >= maxAttempts) {
+                            clearInterval(pollStatus);
+                            hideEncodingProgress();
+                            showToast('⏱️ Timeout', 'Burn may still be running. Check status manually.', 'warning', 8000);
+                        }
+                    }, 2000);
+                }
+
+                async function retryTranslate() {
+                    if (!selectedJobId) return;
+                    if (!confirm(`Retry translation for ${selectedJobId}?`)) return;
+                    await runJobAction('retry_translate', {}, true);
+                }
+
+                async function retryReview() {
+                    if (!selectedJobId) return;
+                    if (!confirm(`Retry AI review for ${selectedJobId}?`)) return;
+                    await runJobAction('retry_review', {}, true);
+                }
+
+                async function unhaltJob() {
+                    if (!selectedJobId) return;
+                    if (!confirm(`Unhalt ${selectedJobId} and resume workflow?`)) return;
+                    await runJobAction('unhalt_job', {}, true);
+                }
+
+                async function reBurn() {
+                    if (!selectedJobId) return;
+
+                    // Get current delivery profile from dropdown
+                    const profileSelect = document.getElementById('insp-delivery-profile');
+                    const profile = profileSelect ? profileSelect.value : 'broadcast_hevc';
+                    const profileName = profileSelect ? profileSelect.options[profileSelect.selectedIndex].text : 'Broadcast HEVC';
+
+                    if (!confirm(`Re-Burn ${selectedJobId} with ${profileName}?\n\nThis will backup the old video and queue a fresh encode.`)) return;
+
+                    // Show immediate feedback
+                    showToast('Re-Burn Queued', `${selectedJobId} is being prepared for re-encoding with ${profileName}`, 'info', 3000);
+
+                    const res = await runJobAction('re_burn', { delivery_profile: profile }, true);
+                    if (res && res.success) {
+                        showToast('Re-Burn Started', `${selectedJobId} moved to active queue.\nEncoding with: ${profileName}`, 'success', 8000);
+                        switchTab('active');
+                        fetchJobs();
+                    } else {
+                        showToast('Re-Burn Failed', res?.error || 'Unknown error', 'error', 8000);
+                    }
+                }
+
+                async function restartManager() {
+                    if (!confirm('Restart the Omega Manager? It will restart when safe/idle.')) return;
+                    await runJobAction('restart_manager', {}, false);
+                }
+
+                async function deleteJob() {
+                    if (!selectedJobId) return;
+                    if (!confirm(`Are you sure you want to delete ${selectedJobId}? This cannot be undone.`)) return;
+
+                    const data = await runJobAction('delete_job', {}, true);
+                    if (data?.success) {
+                        selectedJobId = null;
+                        selectedStem = null;
+                        document.getElementById('inspector-content').classList.add('hidden');
+                        document.getElementById('inspector-empty').classList.remove('hidden');
+                        fetchJobs();
+                    }
+                }
+
+                function updateInspectorState(locked) {
+                    const inspectorContent = document.getElementById('inspector-content');
+                    const lockMsg = document.getElementById('lock-msg');
+                    const selects = inspectorContent.querySelectorAll('select');
+                    const modeAuto = document.getElementById('btn-mode-auto');
+                    const modeReview = document.getElementById('btn-mode-review');
+
+                    if (locked) {
+                        lockMsg.classList.remove('hidden');
+                        selects.forEach(el => el.setAttribute('disabled', 'true'));
+                        if (modeAuto) modeAuto.setAttribute('disabled', 'true');
+                        if (modeReview) modeReview.setAttribute('disabled', 'true');
+                    } else {
+                        lockMsg.classList.add('hidden');
+                        selects.forEach(el => el.removeAttribute('disabled'));
+                        if (modeAuto) modeAuto.removeAttribute('disabled');
+                        if (modeReview) modeReview.removeAttribute('disabled');
+                    }
+                }
+            </script>
+            <!-- Surgical Tool Modal -->
+            <div id="surgical-modal" class="fixed inset-0 bg-black/90 z-50 hidden flex flex-col">
+                <!-- Header -->
+                <div class="h-14 border-b border-[#333] flex items-center justify-between px-6 bg-[#1a1a1a]">
+                    <div class="flex items-center gap-4">
+                        <h2 class="text-white font-bold tracking-wider flex items-center gap-2"><svg class="w-5 h-5"
+                                fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round"
+                                    d="M16.862 4.487l1.687-1.688a1.875 1.875 0 112.652 2.652L6.832 19.82a4.5 4.5 0 01-1.897 1.13l-2.685.8.8-2.685a4.5 4.5 0 011.13-1.897L16.863 4.487zm0 0L19.5 7.125" />
+                            </svg> SUBTITLE EDITOR</h2>
+                        <span id="surgical-filename" class="text-[#666] text-xs font-mono"></span>
+                    </div>
+                    <div class="flex items-center gap-3">
+                        <button onclick="closeSurgical()"
+                            class="text-[#888] hover:text-white text-xs uppercase font-bold tracking-wider px-4 py-2">Cancel</button>
+                        <button onclick="saveSurgical()"
+                            class="bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold uppercase tracking-wider px-6 py-2 rounded-md shadow-lg shadow-emerald-900/20 transition-all">Save
+                            & Finalize</button>
+                    </div>
+                </div>
+
+                <!-- Editor Area -->
+                <div class="flex-1 flex overflow-hidden">
+                    <!-- Video Preview -->
+                    <div class="w-[400px] bg-black border-r border-[#333] flex flex-col">
+                        <div class="aspect-video bg-black relative">
+                            <video id="surgical-video" class="w-full h-full object-contain" controls></video>
+                            <div id="video-placeholder"
+                                class="absolute inset-0 flex items-center justify-center text-[#444] text-xs">
+                                No Preview Available
+                            </div>
+                        </div>
+                        <div class="p-4 text-xs text-[#666] font-mono">
+                            <p>Click a subtitle to jump to time.</p>
+                        </div>
+                    </div>
+
+                    <!-- Subtitles -->
+                    <div class="flex-1 overflow-y-auto p-6">
+                        <div class="max-w-4xl mx-auto">
+                            <div id="surgical-editor" class="space-y-1">
+                                <!-- Segments injected here -->
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <script>
+                // ... Existing Scripts ...
+
+                // Surgical Tool Logic
+                let currentSegments = [];
+                let currentStem = null;
+
+                async function openSurgical() {
+                    if (!selectedJobId) return;
+                    currentStem = selectedJobId;
+                    document.getElementById('surgical-filename').innerText = currentStem;
+
+                    // Show Modal
+                    document.getElementById('surgical-modal').classList.remove('hidden');
+                    document.getElementById('surgical-editor').innerHTML = '<div class="text-center text-[#666] py-20">Loading segments...</div>';
+
+                    // Load Video
+                    const video = document.getElementById('surgical-video');
+                    const placeholder = document.getElementById('video-placeholder');
+                    const token = getAdminToken();
+                    const qp = token ? `?admin_token=${encodeURIComponent(token)}` : '';
+                    video.src = `/api/stream/${currentStem}${qp}`;
+                    video.onerror = () => {
+                        video.classList.add('hidden');
+                        placeholder.classList.remove('hidden');
+                    };
+                    video.onloadeddata = () => {
+                        video.classList.remove('hidden');
+                        placeholder.classList.add('hidden');
+                    };
+
+                    try {
+                        const res = await fetch(`/api/surgical/segments?stem=${currentStem}`, { headers: { ...adminHeaders() } });
+                        const data = await res.json();
+
+                        if (data.error) throw new Error(data.error);
+
+                        currentSegments = data.segments;
+                        renderSegments();
+
+                    } catch (e) {
+                        alert("Failed to load segments: " + e.message);
+                        closeSurgical();
+                    }
+                }
+
+                function closeSurgical() {
+                    document.getElementById('surgical-modal').classList.add('hidden');
+                    currentSegments = [];
+                    currentStem = null;
+                }
+
+                function renderSegments() {
+                    const container = document.getElementById('surgical-editor');
+                    container.innerHTML = '';
+
+                    currentSegments.forEach((seg, index) => {
+                        const row = document.createElement('div');
+                        row.className = "flex gap-4 group bg-[#222] hover:bg-[#2a2a2a] border border-[#333] rounded p-3 transition-colors cursor-pointer";
+                        row.onclick = (e) => {
+                            // Don't seek if clicking textarea or button
+                            if (e.target.tagName === 'TEXTAREA' || e.target.tagName === 'BUTTON') return;
+                            const video = document.getElementById('surgical-video');
+                            if (video) {
+                                video.currentTime = seg.start;
+                                video.play();
+                            }
+                        };
+                        row.innerHTML = `
+                    <div class="w-24 text-[10px] font-mono text-[#666] pt-1.5 flex flex-col gap-1">
+                        <div>${formatSurgicalTime(seg.start)}</div>
+                        <div>${formatSurgicalTime(seg.end)}</div>
+                        <div class="text-[#444]">#${seg.id}</div>
+                    </div>
+                    
+                    <!-- Source Text -->
+                    <div class="flex-1 text-sm text-[#888] italic font-serif leading-relaxed px-4 border-r border-[#333]">
+                        ${seg.source_text || '<span class="opacity-30">No source</span>'}
+                    </div>
+
+                    <div class="flex-1 pl-4">
+                        <textarea 
+                            oninput="updateSegment(${index}, this.value)"
+                            onfocus="seekVideo(${seg.start})"
+                            class="w-full bg-transparent text-white text-sm font-medium outline-none resize-none border-none p-0 leading-relaxed h-auto overflow-hidden"
+                            rows="2"
+                        >${seg.text}</textarea>
+                    </div>
+                    <div class="w-8 flex items-start justify-end opacity-0 group-hover:opacity-100 transition-opacity">
+                        <button onclick="deleteSegment(${index})" class="text-[#666] hover:text-red-400 p-1">
+                            ✕
+                        </button>
+                    </div>
+                `;
+                        container.appendChild(row);
+
+                        // Auto-resize textarea
+                        const ta = row.querySelector('textarea');
+                        ta.style.height = 'auto';
+                        ta.style.height = ta.scrollHeight + 'px';
+                    });
+                }
+
+                function updateSegment(index, value) {
+                    currentSegments[index].text = value;
+                }
+
+                function deleteSegment(index) {
+                    if (confirm("Delete this segment?")) {
+                        currentSegments.splice(index, 1);
+                        renderSegments();
+                    }
+                }
+
+                async function saveSurgical() {
+                    const btn = document.querySelector('button[onclick="saveSurgical()"]');
+                    const originalText = btn.innerText;
+                    btn.innerText = "Finalizing...";
+                    btn.disabled = true;
+
+                    try {
+                        const res = await fetch('/api/surgical/save', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json', ...adminHeaders() },
+                            body: JSON.stringify({
+                                stem: currentStem,
+                                segments: currentSegments
+                            })
+                        });
+
+                        const data = await res.json();
+                        if (data.error) throw new Error(data.error);
+
+                        closeSurgical();
+                        showSaved(); // Reuse existing toast
+
+                    } catch (e) {
+                        alert("Save failed: " + e.message);
+                    } finally {
+                        btn.innerText = originalText;
+                        btn.disabled = false;
+                    }
+                }
+
+                function formatSurgicalTime(seconds) {
+                    if (seconds == null || isNaN(seconds)) return '--:--:--';
+                    const date = new Date(seconds * 1000);
+                    if (isNaN(date.getTime())) return '--:--:--';
+                    return date.toISOString().substr(11, 8);
+                }
+
+                function seekVideo(time) {
+                    const video = document.getElementById('surgical-video');
+                    if (video) {
+                        video.currentTime = time;
+                        // Optional: video.play();
+                    }
+                }
+                // --- ASSISTANT ---
+                let chatHistory = [];
+
+                function toggleAssistant() {
+                    const panel = document.getElementById('assistant-panel');
+                    const isOpen = !panel.classList.contains('hidden');
+                    if (isOpen) {
+                        panel.classList.add('hidden');
+                    } else {
+                        panel.classList.remove('hidden');
+                        document.getElementById('chat-job-id').textContent = selectedStem || 'Current Job';
+                        document.getElementById('chat-input').focus();
+                    }
+                }
+
+                function handleChatKey(e) {
+                    if (e.key === 'Enter' && !e.shiftKey) {
+                        e.preventDefault();
+                        sendChatMessage();
+                    }
+                }
+
+                async function sendChatMessage() {
+                    if (!selectedStem) return;
+
+                    const input = document.getElementById('chat-input');
+                    const message = input.value.trim();
+                    if (!message) return;
+
+                    // Add user message to UI
+                    appendChatMessage('user', message);
+                    input.value = '';
+
+                    // Disable input
+                    input.disabled = true;
+                    document.getElementById('chat-send-btn').disabled = true;
+
+                    // Add typing indicator
+                    const typingId = appendChatMessage('system', 'Thinking...');
+
+                    try {
+                        const res = await fetch('/api/assistant/chat', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                                job_id: selectedStem,
+                                message: message,
+                                history: chatHistory
+                            })
+                        });
+
+                        const data = await res.json();
+
+                        // Remove typing
+                        document.getElementById(typingId).remove();
+
+                        if (data.error) {
+                            appendChatMessage('system', `Error: ${data.error}`, true);
+                        } else {
+                            if (data.edits_performed) {
+                                appendChatMessage('assistant', `✅ ${data.response} (${data.corrected_count} edits applied)`);
+                                showToast('Edits Applied', 'Assistant updated the subtitles.', 'success');
+                                fetchJobs(); // Refresh job data (re-burn status might invoke)
+                            } else {
+                                appendChatMessage('assistant', data.response);
+                            }
+
+                            // Update history (optional)
+                            chatHistory.push({ role: 'user', content: message });
+                            chatHistory.push({ role: 'model', content: data.response });
+                        }
+
+                    } catch (err) {
+                        document.getElementById(typingId).remove();
+                        appendChatMessage('system', `Network Error: ${err.message}`, true);
+                    } finally {
+                        input.disabled = false;
+                        document.getElementById('chat-send-btn').disabled = false;
+                        input.focus();
+                    }
+                }
+
+                function appendChatMessage(role, text, isError = false) {
+                    const container = document.getElementById('chat-messages');
+                    const id = 'msg-' + Math.random().toString(36).substr(2, 9);
+
+                    const div = document.createElement('div');
+                    div.id = id;
+                    div.className = `p-3 max-w-[90%] border rounded-lg text-xs leading-relaxed ${role === 'user' ? 'bg-[#333] border-[#444] self-end text-white' : 'bg-[#222] border-[#333] self-start text-[#ccc]'}`;
+
+                    if (isError) {
+                        div.classList.add('border-red-500', 'text-red-300');
+                    }
+
+                    if (role === 'assistant' && text.startsWith('✅')) {
+                        div.classList.add('border-green-500/30', 'bg-green-900/10');
+                    }
+
+                    div.innerText = text;
+                    container.appendChild(div);
+                    container.scrollTop = container.scrollHeight;
+
+                    return id;
+                }
+
+            </script>
+</body>
+
+</html>

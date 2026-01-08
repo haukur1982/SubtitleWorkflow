@@ -1,0 +1,9 @@
+{
+  "rating": 8.5,
+  "quality_tier": "Broadcast Ready",
+  "summary": "The translation is generally excellent, with a natural flow and correct handling of biblical language (using 'oss/vér' for scripture readings). The translator successfully caught one robot error ('hold' to 'hole' in segment 655) but missed two others ('Halloween' and 'bath'), translating them literally. These need to be fixed to avoid confusion.",
+  "major_issues": [
+    "Robot Mistakes"
+  ],
+  "suggestions": "Watch out for speech-to-text errors in the source script, especially during worship sections or emotional peaks. For segment 12, 'þá hefur verið snjóstormur hér' is slightly more natural than 'þá höfum við fengið snjóstorm'. Ensure titles like 'Pastor' are translated consistently (preferably 'Prestur' or 'Séra')."
+}

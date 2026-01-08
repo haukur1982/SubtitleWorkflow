@@ -138,7 +138,7 @@ def _merge_safety_segments(primary, safety, window_seconds, *, overlap_pad: floa
         seg["id"] = idx
     return combined, len(added)
 
-def _audio_duration_seconds(audio_path: Path) -> float:
+def get_audio_duration(audio_path: Path) -> float:
     cmd = [
         str(config.FFPROBE_BIN),
         "-v", "error",
@@ -147,7 +147,7 @@ def _audio_duration_seconds(audio_path: Path) -> float:
         str(audio_path),
     ]
     try:
-        result = subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        result = subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, stdin=subprocess.DEVNULL)
         value = (result.stdout or "").strip()
         return float(value)
     except Exception as exc:
@@ -156,8 +156,8 @@ def _audio_duration_seconds(audio_path: Path) -> float:
 
 def ingest(file_path: Path):
     """
-    Moves video to Vault and extracts audio.
-    Returns (video_path, audio_path).
+    Moves video to Vault, extracts audio, and generates thumbnail.
+    Returns (video_path, audio_path, thumbnail_path).
     """
     stem = file_path.stem
     
@@ -171,12 +171,6 @@ def ingest(file_path: Path):
         logger.info(f"📦 Moved to Vault: {vault_video_path.name}")
     
     # 2. Extract Audio
-    audio_path = config.VAULT_DATA / f"{stem}.wav" # Using VAULT_DATA for audio temp
-    # Actually config.py has VAULT_VIDEOS and VAULT_DATA. 
-    # auto_skeleton used VAULT_AUDIO. Let's stick to VAULT_DATA for simplicity or add VAULT_AUDIO to config?
-    # config.py didn't have VAULT_AUDIO. I'll use VAULT_DATA for now or create it.
-    # Let's use VAULT_DATA/Audio to keep it clean.
-    
     audio_dir = config.VAULT_DIR / "Audio"
     audio_dir.mkdir(exist_ok=True)
     audio_path = audio_dir / f"{stem}.wav"
@@ -189,11 +183,88 @@ def ingest(file_path: Path):
             "-vn", "-acodec", "pcm_s16le", "-ar", "16000", "-ac", "1",
             str(audio_path)
         ]
-        subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+        subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, stdin=subprocess.DEVNULL)
     
-    return vault_video_path, audio_path
+    # 3. Generate Thumbnail (for Library view)
+    thumbnail_dir = config.VAULT_DIR / "Thumbnails"
+    thumbnail_dir.mkdir(exist_ok=True)
+    thumbnail_path = thumbnail_dir / f"{stem}.jpg"
+    
+    if not thumbnail_path.exists():
+        logger.info(f"🖼️ Generating Thumbnail: {thumbnail_path.name}")
+        thumbnail_path = generate_thumbnail(vault_video_path, thumbnail_path)
 
-def transcribe(audio_path: Path):
+    # 4. Generate Proxy (for Dashboard Playback)
+    proxies_dir = config.VAULT_DIR / "Proxies"
+    proxies_dir.mkdir(exist_ok=True)
+    proxy_path = proxies_dir / f"{stem}_PROXY.mp4"
+    
+    if not proxy_path.exists():
+        logger.info(f"🎞️ Generating Proxy: {proxy_path.name}")
+        generate_proxy(vault_video_path, proxy_path)
+    
+    return vault_video_path, audio_path, thumbnail_path
+
+
+def generate_thumbnail(video_path: Path, output_path: Path, seek_seconds: float = 10) -> Path:
+    """
+    Extract a frame from video to use as thumbnail.
+    Falls back to 25% of duration if seek_seconds exceeds video length.
+    """
+    try:
+        # Try extracting at specified time
+        cmd = [
+            config.FFMPEG_BIN, "-y",
+            "-ss", str(seek_seconds),
+            "-i", str(video_path),
+            "-vframes", "1",
+            "-vf", "scale=320:-1",
+            "-q:v", "2",
+            str(output_path)
+        ]
+        result = subprocess.run(cmd, capture_output=True, timeout=30, stdin=subprocess.DEVNULL)
+        
+        if output_path.exists() and output_path.stat().st_size > 0:
+            return output_path
+        
+        # Fallback: try at 1 second
+        cmd[3] = "1"
+        subprocess.run(cmd, capture_output=True, timeout=30, stdin=subprocess.DEVNULL)
+        
+        if output_path.exists() and output_path.stat().st_size > 0:
+            return output_path
+            
+    except Exception as e:
+        logger.warning(f"Thumbnail generation failed: {e}")
+    
+    return None
+
+def generate_proxy(video_path: Path, output_path: Path) -> Path:
+    """
+    Generates a web-optimised proxy (H.264, 480p) for the dashboard.
+    """
+    try:
+        cmd = [
+            config.FFMPEG_BIN, "-y",
+            "-i", str(video_path),
+            "-c:v", "libx264",
+            "-vf", "scale=-2:480",
+            "-c:a", "aac",
+            "-b:a", "128k",
+            str(output_path)
+        ]
+        # Run asynchronously or block? Ingest is already async task, so blocking is fine.
+        subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, stdin=subprocess.DEVNULL)
+        
+        if output_path.exists() and output_path.stat().st_size > 0:
+            return output_path
+            
+    except Exception as e:
+        logger.warning(f"Proxy generation failed: {e}")
+    
+    return None
+
+def transcribe(audio_path: Path, job_id: str = None):
     """
     Transcribes audio to skeleton JSON.
     
@@ -202,7 +273,7 @@ def transcribe(audio_path: Path):
     
     If OMEGA_DEMUCS_ENABLED=1, first extracts vocals to remove background music.
     """
-    stem = audio_path.stem
+    stem = job_id if job_id else audio_path.stem
     
     # Step 1: Demucs vocal extraction (optional, removes background music)
     transcription_audio = audio_path
@@ -243,21 +314,22 @@ def transcribe(audio_path: Path):
     if use_assemblyai:
         try:
             from workers import transcriber_assemblyai
-            return transcriber_assemblyai.transcribe_assemblyai(transcription_audio)
+            return transcriber_assemblyai.transcribe_assemblyai(transcription_audio, job_id=job_id)
         except Exception as e:
             logger.warning(f"⚠️ AssemblyAI failed, falling back to WhisperX: {e}")
             # Fall through to WhisperX
     
     # WhisperX (local) transcription
-    return _transcribe_whisperx(transcription_audio)
+    # WhisperX (local) transcription
+    return _transcribe_whisperx(transcription_audio, job_id=job_id)
 
 
-def _transcribe_whisperx(audio_path: Path):
+def _transcribe_whisperx(audio_path: Path, job_id: str = None):
     """
     Runs WhisperX locally on the audio file.
     Returns path to Skeleton JSON.
     """
-    stem = audio_path.stem
+    stem = job_id if job_id else audio_path.stem
     output_dir = config.VAULT_DATA
     
     logger.info(f"📝 Transcribing (WhisperX): {stem}")
@@ -283,7 +355,7 @@ def _transcribe_whisperx(audio_path: Path):
     last_update = 0.0
     last_lines = deque(maxlen=40)
     last_time_sec = 0.0
-    total_seconds = _audio_duration_seconds(audio_path)
+    total_seconds = get_audio_duration(audio_path)
     total_minutes = (total_seconds / 60.0) if total_seconds else 0.0
 
     def update_progress(pct: float, current_phase: str):
@@ -436,7 +508,7 @@ def _transcribe_whisperx(audio_path: Path):
                     "-vn", "-acodec", "pcm_s16le", "-ar", "16000", "-ac", "1",
                     str(safety_audio),
                 ]
-                subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+                subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, stdin=subprocess.DEVNULL)
 
                 safety_cmd = [
                     str(config.WHISPER_BIN),
@@ -453,7 +525,7 @@ def _transcribe_whisperx(audio_path: Path):
                     "--chunk_size", str(safety_chunk),
                     "--print_progress", "False",
                 ]
-                subprocess.run(safety_cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
+                subprocess.run(safety_cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True, stdin=subprocess.DEVNULL)
 
                 safety_json = output_dir / f"{stem}__safety.json"
                 if safety_json.exists():
@@ -509,10 +581,26 @@ def _transcribe_whisperx(audio_path: Path):
     else:
         raise Exception("WhisperX did not produce JSON output")
 
-def run(file_path: Path):
+def run(file_path: Path, job_id: str = None):
     """
     Full Ingest -> Transcribe pipeline.
     """
-    video_path, audio_path = ingest(file_path)
-    skeleton_path = transcribe(audio_path)
+    video_path, audio_path, _ = ingest(file_path)
+    # If job_id provided, rename extracted audio to match job_id?
+    # omega_manager passed job_id to run(). 
+    # ingest() puts audio at {file_path.stem}.wav in VAULT_DATA/Audio
+    
+    # Correction: We should rename the audio to match job_id if provided
+    # so that subsequent steps find it easily.
+    if job_id:
+        original_audio = audio_path
+        new_audio_path = audio_path.with_name(f"{job_id}.wav")
+        if original_audio != new_audio_path:
+             if new_audio_path.exists():
+                 new_audio_path.unlink()
+             original_audio.rename(new_audio_path)
+             audio_path = new_audio_path
+             logger.info(f"🔊 Renamed audio to Job ID: {audio_path.name}")
+
+    skeleton_path = transcribe(audio_path, job_id=job_id)
     return skeleton_path

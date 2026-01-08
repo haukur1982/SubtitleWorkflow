@@ -44,6 +44,22 @@ export OMEGA_SMTP_FROM="${OMEGA_SMTP_FROM:-haukur1982@gmail.com}"
 # Allow PyTorch to load trusted VAD checkpoints used by whisperx/pyannote.
 export TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD="${TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD:-1}"
 
+# --- ASSEMBLYAI TRANSCRIPTION (fast cloud transcription) ---
+# API key loaded from .omega_secrets
+export ASSEMBLYAI_API_KEY="${ASSEMBLYAI_API_KEY:-}"
+# Transcriber backend: "assemblyai" (default, fast) or "whisperx" (local, slower)
+export OMEGA_TRANSCRIBER="${OMEGA_TRANSCRIBER:-assemblyai}"
+# Word boost weight for religious terms: "low", "default", or "high"
+export ASSEMBLYAI_BOOST_WEIGHT="${ASSEMBLYAI_BOOST_WEIGHT:-high}"
+
+# --- SUBTITLE TIMING CONTROLS (finalizer) ---
+# Modes: balanced (default, readability-first) or strict (tight sync, minimal extension)
+# export OMEGA_TIMING_MODE="${OMEGA_TIMING_MODE:-balanced}"
+# In strict mode, allow a small tail after last word (seconds)
+# export OMEGA_TIMING_STRICT_MAX_EXTEND="${OMEGA_TIMING_STRICT_MAX_EXTEND:-0.15}"
+# In strict mode, optional fallback shift when fragment timing is missing (seconds)
+# export OMEGA_TIMING_STRICT_FRAGMENT_SHIFT="${OMEGA_TIMING_STRICT_FRAGMENT_SHIFT:-0.0}"
+
 # Pick Python (prefer venv if present)
 BASE_DIR="$(pwd)"
 if [ -n "${OMEGA_VENV_PY:-}" ] && [ -x "${OMEGA_VENV_PY:-}" ]; then
@@ -68,6 +84,11 @@ elif [ -x "$BASE_DIR/.venv/bin/whisperx" ]; then
   export OMEGA_WHISPER_BIN="$BASE_DIR/.venv/bin/whisperx"
 fi
 
+# Review Portal Configuration
+export OMEGA_REVIEW_PORTAL_ENABLED="${OMEGA_REVIEW_PORTAL_ENABLED:-0}"
+export OMEGA_REVIEW_PORTAL_URL="${OMEGA_REVIEW_PORTAL_URL:-https://omega-review-283123700702.us-central1.run.app}"
+export OMEGA_REVIEW_SECRET="${OMEGA_REVIEW_SECRET:-omega-review-secret-2024}"
+
 # 1. Check if already running
 if [ -f "$LOCK_FILE" ]; then
     PID=$(cat "$LOCK_FILE")
@@ -88,16 +109,48 @@ echo "   Dashboard PID: $DASH_PID"
 echo "   Dashboard: http://127.0.0.1:8080"
 
 # 2.5 Check external storage readiness (symlink targets writable)
-echo "💾 Checking SSD mount / symlink writability..."
+echo "💾 Checking Storage: /Volumes/Extreme SSD"
+DRIVE_PATH="/Volumes/Extreme SSD"
+
+# Wait Loop
+retries=0
+while [ ! -d "$DRIVE_PATH" ]; do
+    echo "⚠️  WARNING: Drive not found! Waiting 10s... (Attempt $((retries+1)))"
+    sleep 10
+    retries=$((retries+1))
+    
+    # Alert at 2 minutes (12 * 10s = 120s)
+    if [ $retries -eq 12 ]; then
+        echo "🚨 ALERT: Critical Drive Failure (2 mins). Sending notification..."
+        "$OMEGA_PYTHON" check_drive_alert.py 2
+    fi
+    # Re-alert at 10 minutes
+    if [ $retries -eq 60 ]; then
+        "$OMEGA_PYTHON" check_drive_alert.py 10
+    fi
+done
+
+echo "   ✅ Drive Mounted. Verifying configuration..."
 if "$OMEGA_PYTHON" - <<'PY'
 import sys
 import config
 sys.exit(0 if config.critical_paths_ready(require_write=True) else 1)
 PY
 then
-  echo "   ✅ Storage ready"
+  echo "   ✅ Storage and Paths ready"
 else
-  echo "   ❌ Storage not ready (mount /Volumes/Extreme SSD). Manager will wait."
+  echo "   ❌ Config validation failed despite drive presence. Proceeding with caution."
+fi
+
+# 2.8 Pre-Flight System Check (validates GCS, Vertex, FFmpeg, etc.)
+echo "🔍 Running Pre-Flight Check..."
+if "$OMEGA_PYTHON" preflight.py; then
+  echo "   ✅ All systems operational"
+else
+  echo ""
+  echo "   ⚠️  Pre-flight check found issues. Review above."
+  echo "   System will start, but some features may not work."
+  echo ""
 fi
 
 # 3. Start Manager in background

@@ -178,9 +178,16 @@ PROFILES = {
     }
 }
 
-def get_system_instruction(lang_code="is", profile_key="standard"):
+def get_system_instruction(lang_code="is", profile_key="standard", extra_terms=None):
     """
     Composes the final System Prompt by merging Language Physics + Persona Soul.
+    
+    Args:
+        lang_code: Target language code (e.g., "is", "es")
+        profile_key: Program profile key (e.g., "standard", "in_touch")
+        extra_terms: Optional dict of additional terms from job-specific termbook.
+                     Format: {"source_term": "translated_term", ...}
+                     These override profile terms for per-job customization.
     """
     lang = LANGUAGES.get(lang_code, LANGUAGES["is"])
     profile = PROFILES.get(profile_key, PROFILES["standard"])
@@ -194,6 +201,10 @@ def get_system_instruction(lang_code="is", profile_key="standard"):
         else:
             # Fallback to English/Key if translation missing
             active_glossary[term] = term
+    
+    # Merge extra terms from job-specific termbook (overrides profile terms)
+    if extra_terms and isinstance(extra_terms, dict):
+        active_glossary.update(extra_terms)
 
     prompt = f"""
     ROLE: You are the Lead Translator for Omega TV.
@@ -218,3 +229,30 @@ def get_system_instruction(lang_code="is", profile_key="standard"):
     """
     
     return prompt
+
+# --- 3. THE POLITICS (Delivery Policies) ---
+# Defaults for Dubbing vs. Subtitling based on region.
+
+LANGUAGE_POLICIES = {
+    # Subtitling Markets (Scandinavia, Benelux, etc.)
+    "is": {"mode": "sub", "voice": "alloy"},
+    "en": {"mode": "sub", "voice": "alloy"}, # SDH
+    "no": {"mode": "sub", "voice": "alloy"},
+    "sv": {"mode": "sub", "voice": "alloy"},
+    "da": {"mode": "sub", "voice": "alloy"},
+    "nl": {"mode": "sub", "voice": "alloy"},
+    "pt": {"mode": "sub", "voice": "onyx"}, # Portugal (European)
+    
+    # Dubbing Markets (DACH, Romance, LatAm)
+    "es": {"mode": "dub", "voice": "echo"}, 
+    "fr": {"mode": "dub", "voice": "shimmer"}, 
+    "de": {"mode": "dub", "voice": "onyx"}, 
+    "it": {"mode": "dub", "voice": "fable"},
+    "ru": {"mode": "dub", "voice": "echo"},
+}
+
+def get_language_policy(lang_code):
+    """Returns the default delivery policy (mode, voice) for a language."""
+    # Default to Subtitling if unknown (safest)
+    return LANGUAGE_POLICIES.get(lang_code, {"mode": "sub", "voice": "alloy"})
+

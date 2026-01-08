@@ -18,7 +18,7 @@ def slugify(value: str) -> str:
 
 
 def new_job_id(stem: str) -> str:
-    ts = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    ts = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
     return f"{slugify(stem)}-{ts}"
 
 
@@ -62,6 +62,14 @@ class GcsJobPaths:
 
     def review_corrections_json(self) -> str:
         return f"{self._base()}/review_corrections.json"
+    
+    def reviewed_json(self) -> str:
+        """Pattern used by review portal: {job_id}_REVIEWED.json"""
+        return f"{self._base()}/{self.job_id}_REVIEWED.json"
+        
+    def review_status_json(self) -> str:
+        """Status file written by review portal after approval"""
+        return f"{self._base()}/review_status.json"
 
     def progress_json(self) -> str:
         return f"{self._base()}/progress.json"
@@ -116,5 +124,37 @@ def utc_iso_now() -> str:
 
 
 def backoff_sleep(attempt: int, *, base_seconds: float = 1.7, cap_seconds: float = 45.0) -> None:
+    """Standard exponential backoff for transient failures."""
     delay = min(cap_seconds, base_seconds ** max(1, attempt))
     time.sleep(delay)
+
+
+def is_rate_limit_error(exc: Exception) -> bool:
+    """
+    Check if an exception is a rate limit / quota error.
+    
+    Vertex AI returns google.api_core.exceptions.ResourceExhausted for 429.
+    """
+    exc_str = str(exc).lower()
+    exc_type = type(exc).__name__.lower()
+    
+    # Check for common rate limit indicators
+    if "429" in exc_str or "resourceexhausted" in exc_type:
+        return True
+    if "quota" in exc_str or "rate" in exc_str:
+        return True
+    if "too many requests" in exc_str:
+        return True
+    return False
+
+
+def rate_limit_backoff(attempt: int, *, base_seconds: float = 15.0, cap_seconds: float = 120.0) -> None:
+    """
+    Extended backoff for rate limit / quota errors.
+    
+    Uses longer delays (15s base, 120s cap) to let quota reset.
+    For batch processing of 10+ programs, this prevents quota exhaustion.
+    """
+    delay = min(cap_seconds, base_seconds * max(1, attempt))
+    time.sleep(delay)
+

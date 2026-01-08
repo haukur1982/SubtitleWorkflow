@@ -81,8 +81,7 @@ FFPROBE_BIN = get_binary("ffprobe", "ffprobe")
 _WHISPERX_PY39 = Path.home() / "Library" / "Python" / "3.9" / "bin" / "whisperx"
 WHISPER_BIN = (
     os.environ.get("OMEGA_WHISPER_BIN", "").strip()
-    or (str(_WHISPERX_PY39) if _WHISPERX_PY39.exists() else None)
-    or get_binary("whisperx", "whisperx")
+    or str(BASE_DIR / "scripts" / "whisperx_wrapper.py")
 )
 
 # --- STORAGE READINESS ---
@@ -137,6 +136,22 @@ def critical_paths_ready(require_write: bool = False) -> bool:
 
     return all(_check_dir(p) for p in required)
 
+def disk_space_available(min_gb: float = 50.0) -> tuple[bool, float]:
+    """
+    Check if sufficient disk space is available for batch processing.
+    
+    Returns (is_sufficient, available_gb).
+    Checks the DELIVERY_DIR path (usually where output goes).
+    """
+    try:
+        target = DELIVERY_DIR.resolve() if DELIVERY_DIR.is_symlink() else DELIVERY_DIR
+        stat = shutil.disk_usage(str(target))
+        available_gb = stat.free / (1024**3)
+        return (available_gb >= min_gb, available_gb)
+    except Exception as e:
+        logger.warning("Could not check disk space: %s", e)
+        return (False, 0.0)
+
 # --- SETTINGS ---
 # Whisper
 WHISPER_MODEL = os.environ.get("OMEGA_WHISPER_MODEL", "large-v3").strip() or "large-v3"
@@ -149,6 +164,7 @@ WHISPER_DEVICE = os.environ.get("OMEGA_WHISPER_DEVICE", "cpu").strip() or "cpu"
 MODEL_TRANSLATOR = "gemini-3-pro-preview"  # The "Brain" for Translation
 MODEL_EDITOR = "gemini-3-pro-preview"      # The "Brain" for Review
 MODEL_POLISH = os.environ.get("OMEGA_MODEL_POLISH", MODEL_TRANSLATOR).strip() or MODEL_TRANSLATOR
+MODEL_ASSISTANT = "gemini-3-flash-preview"   # Officially verified Gemini 3 Flash string
 GEMINI_LOCATION = "global"                 # Required for Preview models
 
 # --- CLOUD ARTIFACTS (GCS) ---
@@ -163,7 +179,7 @@ OMEGA_CLOUD_MUSIC_DETECT = os.environ.get("OMEGA_CLOUD_MUSIC_DETECT", "1").strip
 # automatically after uploading job artifacts to GCS (no manual worker run).
 OMEGA_CLOUD_RUN_JOB = os.environ.get("OMEGA_CLOUD_RUN_JOB", "").strip()
 OMEGA_CLOUD_RUN_REGION = os.environ.get("OMEGA_CLOUD_RUN_REGION", "us-central1").strip() or "us-central1"
-OMEGA_CLOUD_PROJECT = os.environ.get("OMEGA_CLOUD_PROJECT", "").strip()
+OMEGA_CLOUD_PROJECT = os.environ.get("OMEGA_CLOUD_PROJECT", "sermon-translator-system").strip() or "sermon-translator-system"
 
 # --- ASSEMBLYAI TRANSCRIPTION ---
 # API key for AssemblyAI (get from https://www.assemblyai.com)
@@ -174,6 +190,16 @@ OMEGA_TRANSCRIBER = os.environ.get("OMEGA_TRANSCRIBER", "assemblyai").strip().lo
 ASSEMBLYAI_WORD_BOOST = os.environ.get("ASSEMBLYAI_WORD_BOOST", "").strip()
 # Word boost weight: "low", "default", or "high"
 ASSEMBLYAI_BOOST_WEIGHT = os.environ.get("ASSEMBLYAI_BOOST_WEIGHT", "high").strip()
+# Enable speaker diarization (multi-speaker detection) - default True
+ASSEMBLYAI_SPEAKER_LABELS = os.environ.get("ASSEMBLYAI_SPEAKER_LABELS", "1").strip().lower() in {"1", "true", "yes", "on"}
+
+# --- ANTHROPIC (CLAUDE) ---
+# API key for Claude Phase 3 Polish Editor (get from https://console.anthropic.com)
+ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "").strip()
+# Enable Claude for Phase 3 Polish (requires ANTHROPIC_API_KEY)
+OMEGA_CLAUDE_POLISH = os.environ.get("OMEGA_CLAUDE_POLISH", "1").strip().lower() in {"1", "true", "yes", "on"}
+# Claude model to use for polish
+OMEGA_CLAUDE_MODEL = os.environ.get("OMEGA_CLAUDE_MODEL", "claude-opus-4-5-20251101").strip()
 
 # --- DEMUCS VOCAL EXTRACTION ---
 # Enable Demucs to remove background music before transcription (requires M2 Mac)
@@ -209,11 +235,156 @@ BURN_METHOD_MAP = {
     "DEFAULT": "RuvBox"
 }
 
-# --- PUBLISH (BROADCAST) ---
-# Defaults target broadcast-friendly 1080p H.264 output.
-# Override via env if needed (e.g. OMEGA_VIDEO_BITRATE=18M).
+# --- DELIVERY PROFILES (MEDIA ENCODING) ---
+# Select the appropriate profile when burning subtitles based on client requirements.
+# Use dashboard dropdown or set DEFAULT_DELIVERY_PROFILE for automatic selection.
+
+DELIVERY_PROFILES = {
+    "broadcast_hevc": {
+        "name": "Broadcast HEVC (Fast)",
+        "encoder": "hevc_videotoolbox",
+        "bitrate": "12M",
+        "maxrate": "15M",
+        "bufsize": "24M",
+        "extra_args": ["-tag:v", "hvc1"],  # QuickTime/Apple compatibility
+        "description": "Fast hardware encoding (9x), modern compatibility",
+        "speed": "9x",
+        "compatibility": "Modern (2017+)"
+    },
+    "broadcast_h264": {
+        "name": "Broadcast H.264 (Universal)",
+        "encoder": "libx264",
+        "preset": "slow",
+        "crf": "18",
+        "maxrate": "18M",
+        "bufsize": "36M",
+        "extra_args": ["-profile:v", "high", "-level", "4.1"],
+        "description": "Software encoding, plays on everything",
+        "speed": "1x",
+        "compatibility": "Universal"
+    },
+    "web": {
+        "name": "Web Optimized",
+        "encoder": "hevc_videotoolbox",
+        "bitrate": "6M",
+        "maxrate": "8M",
+        "bufsize": "12M",
+        "extra_args": ["-tag:v", "hvc1"],
+        "description": "Smaller files for streaming/upload",
+        "speed": "9x",
+        "compatibility": "Modern"
+    },
+    "archive": {
+        "name": "Archive (Master)",
+        "encoder": "libx264",
+        "preset": "veryslow",
+        "crf": "16",
+        "maxrate": "25M",
+        "bufsize": "50M",
+        "extra_args": ["-profile:v", "high"],
+        "description": "Highest quality, for archival",
+        "speed": "0.3x",
+        "compatibility": "Universal"
+    },
+    "universal": {
+        "name": "Universal (Safe Default)",
+        "encoder": "libx264",
+        "preset": "medium",
+        "crf": "20",
+        "maxrate": "12M",
+        "bufsize": "24M",
+        "extra_args": ["-profile:v", "main", "-level", "4.0"],
+        "description": "Balanced speed/quality, maximum compatibility",
+        "speed": "2x",
+        "compatibility": "Maximum"
+    }
+}
+
+# Default profile when no specific profile is selected
+DEFAULT_DELIVERY_PROFILE = os.environ.get("OMEGA_DELIVERY_PROFILE", "broadcast_hevc").strip()
+
+# --- CLIENT PATTERNS ---
+# Auto-detect client from filename. Keys are lowercase patterns to match, values are display names.
+# Matched in order, first match wins. Add your clients here.
+CLIENT_PATTERNS = {
+    "intouch": "In Touch",
+    "in_touch": "In Touch",
+    "timessquare": "Times Square Church",
+    "times_square": "Times Square Church",
+    "tsc": "Times Square Church",
+    "charles_stanley": "Charles Stanley",
+    "charlesstanley": "Charles Stanley",
+    "benny_hinn": "Benny Hinn",
+    "bennyhinn": "Benny Hinn",
+    "joyce_meyer": "Joyce Meyer",
+    "joycemeyer": "Joyce Meyer",
+    "i2": "Omega TV",  # Internal production codes
+    "gospel": "Gospel",
+    # Add more patterns as needed
+}
+
+# --- CLIENT DEFAULTS ---
+# Default turnaround time (in days) for each client
+# Delivery template tokens:
+#   {client} - Client name
+#   {title} - Extracted from original filename
+#   {date_YYYY_MM_DD} - 2024_12_28
+#   {date_MM-DD-YY} - 12-28-24
+#   {date_DD_month_YYYY} - 28_december_2024
+CLIENT_DEFAULTS = {
+    "In Touch": {
+        "due_date_days": 7,
+        "delivery_template": "InTouch_{title}_{date_YYYY_MM_DD}",
+        "delivery_method": "folder",  # 'folder', 'email', 'ftp'
+        "delivery_target": "4_DELIVERY/InTouch"
+    },
+    "Times Square Church": {
+        "due_date_days": 5,
+        "delivery_template": "TSC_{title}_{date_MM-DD-YY}",
+        "delivery_method": "folder",
+        "delivery_target": "4_DELIVERY/TSC"
+    },
+    "Charles Stanley": {
+        "due_date_days": 7,
+        "delivery_template": "CharlesStanley_{date_YYYY_MM_DD}_{title}",
+        "delivery_method": "folder",
+        "delivery_target": "4_DELIVERY/CharlesStanley"
+    },
+    "Benny Hinn": {
+        "due_date_days": 10,
+        "delivery_template": "BennyHinn_{title}_{date_MM-DD-YY}",
+        "delivery_method": "folder",
+        "delivery_target": "4_DELIVERY/BennyHinn"
+    },
+    "Joyce Meyer": {
+        "due_date_days": 7,
+        "delivery_template": "JoyceMeyer_{date_YYYY_MM_DD}_{title}",
+        "delivery_method": "folder",
+        "delivery_target": "4_DELIVERY/JoyceMeyer"
+    },
+    "Omega TV": {
+        "due_date_days": 3,
+        "delivery_template": "OmegaTV_{title}_{date_DD_month_YYYY}",
+        "delivery_method": "folder",
+        "delivery_target": "4_DELIVERY/OmegaTV"
+    },
+    "Gospel": {
+        "due_date_days": 7,
+        "delivery_template": "Gospel_{date_YYYY_MM_DD}_{title}",
+        "delivery_method": "folder",
+        "delivery_target": "4_DELIVERY/Gospel"
+    },
+    "unknown": {
+        "due_date_days": 7,
+        "delivery_template": "{title}_{date_YYYY_MM_DD}",
+        "delivery_method": "folder",
+        "delivery_target": "4_DELIVERY"
+    },
+}
+
+# --- LEGACY PUBLISH SETTINGS (for backwards compatibility) ---
 PUBLISH_X264_PRESET = os.environ.get("OMEGA_X264_PRESET", "medium")
 PUBLISH_VIDEO_BITRATE = os.environ.get("OMEGA_VIDEO_BITRATE", "15M")
 PUBLISH_VIDEO_MAXRATE = os.environ.get("OMEGA_VIDEO_MAXRATE", "18M")
 PUBLISH_VIDEO_BUFSIZE = os.environ.get("OMEGA_VIDEO_BUFSIZE", "30M")
-PUBLISH_AUDIO_CODEC = os.environ.get("OMEGA_AUDIO_CODEC", "copy")
+

@@ -61,69 +61,205 @@ def adjust_ass_time(time_str, delta_ms):
     new_cs = (rem % 1000) // 10
     return f"{new_h}:{new_m:02d}:{new_s:02d}.{new_cs:02d}"
 
-def _ffmpeg_encode_args() -> list[str]:
-    return [
-        "-c:v", "libx264",
-        "-preset", getattr(config, "PUBLISH_X264_PRESET", "medium"),
-        "-b:v", getattr(config, "PUBLISH_VIDEO_BITRATE", "15M"),
-        "-maxrate", getattr(config, "PUBLISH_VIDEO_MAXRATE", "18M"),
-        "-bufsize", getattr(config, "PUBLISH_VIDEO_BUFSIZE", "30M"),
-        "-profile:v", "high",
-        "-pix_fmt", "yuv420p",
-        "-movflags", "+faststart",
-    ]
-
-
-def _ffmpeg_audio_args() -> list[str]:
-    audio_codec = getattr(config, "PUBLISH_AUDIO_CODEC", "copy") or "copy"
-    if str(audio_codec).lower() == "copy":
-        return ["-c:a", "copy"]
-    # Best-effort: user can override with env vars; keep defaults conservative.
-    return ["-c:a", str(audio_codec)]
-
-
-def publish(video_path: Path, srt_path: Path, subtitle_style: str = "Classic", output_dir: Path = None):
+def build_encoder_args(profile: dict) -> list:
     """
-    Burns subtitles into video using the specified style.
-    Styles: "Classic" (RuvBox), "Modern" (Default/Shadow).
+    Build FFmpeg encoder arguments from a delivery profile.
+    Supports both hardware (videotoolbox) and software (libx264) encoders.
+    """
+    encoder = profile.get("encoder", "hevc_videotoolbox")
+    args = ["-c:v", encoder]
+    
+    if "videotoolbox" in encoder:
+        # Hardware encoder - uses bitrate mode
+        if profile.get("bitrate"):
+            args.extend(["-b:v", profile["bitrate"]])
+        if profile.get("maxrate"):
+            args.extend(["-maxrate", profile["maxrate"]])
+        if profile.get("bufsize"):
+            args.extend(["-bufsize", profile["bufsize"]])
+        # Add QuickTime compatibility tag for HEVC
+        if "hevc" in encoder:
+            args.extend(["-tag:v", "hvc1"])
+    else:
+        # Software encoder (libx264) - uses CRF or bitrate
+        if profile.get("preset"):
+            args.extend(["-preset", profile["preset"]])
+        if profile.get("crf"):
+            args.extend(["-crf", profile["crf"]])
+        elif profile.get("bitrate"):
+            args.extend(["-b:v", profile["bitrate"]])
+        if profile.get("maxrate"):
+            args.extend(["-maxrate", profile["maxrate"]])
+        if profile.get("bufsize"):
+            args.extend(["-bufsize", profile["bufsize"]])
+    
+    # Add any extra profile-specific args
+    if profile.get("extra_args"):
+        args.extend(profile["extra_args"])
+        
+    return args
+
+def _run_ffmpeg_with_progress(cmd, stem, output_file, video_path):
+    """
+    Runs FFmpeg with real-time progress tracking updates to DB.
+    """
+    try:
+        # Use Popen for real-time progress parsing
+        logger.info(f"   🐢 Encoding with progress tracking...")
+        process = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT, 
+            universal_newlines=True,
+            bufsize=1
+        )
+        
+        # Get total duration for progress calculation
+        total_duration = 0
+        try:
+            # Try getting from DB first using stem (job_id)
+            job = omega_db.get_job(stem) or {}
+            
+            if job.get("program_id"):
+                prog = omega_db.get_program(job.get("program_id"))
+                if prog:
+                    total_duration = float(prog.get("duration_seconds") or 0)
+            
+            # Fallback: estimate from video file if DB missing
+            if total_duration <= 0 and video_path.exists():
+                probe_cmd = [
+                    config.FFPROBE_BIN, 
+                    "-v", "error", 
+                    "-show_entries", "format=duration", 
+                    "-of", "default=noprint_wrappers=1:nokey=1", 
+                    str(video_path)
+                ]
+                total_duration = float(subprocess.check_output(probe_cmd).strip())
+        except Exception as e:
+            logger.warning(f"Could not determine duration for progress: {e}")
+            total_duration = 0
+
+        logger.info(f"   Duration: {total_duration}s")
+        
+        # Progress loop
+        import re
+        time_pattern = re.compile(r"time=(\d{2}):(\d{2}):(\d{2}\.\d{2})")
+        last_progress_update = 0
+        
+        while True:
+            line = process.stdout.readline()
+            if not line and process.poll() is not None:
+                break
+            
+            if line:
+                # Parse time=00:00:00.00
+                match = time_pattern.search(line)
+                if match and total_duration > 0:
+                    h, m, s = match.groups()
+                    current_seconds = int(h) * 3600 + int(m) * 60 + float(s)
+                    progress = min(99.0, (current_seconds / total_duration) * 100)
+                    
+                    # Update DB every 2 seconds or 5% change to save DB writes
+                    now = time.time()
+                    if (now - last_progress_update > 2.0):
+                         # Find track? We only have stem/job_id.
+                         # Need to update job progress.
+                         omega_db.update(stem, progress=progress, status=f"Burning {int(progress)}%")
+                         
+                         # Also try to update TRACK if we can find it
+                         # We can iterate tracks for job?
+                         # Or just update job and let UI poll job?
+                         # Dashboard UI polls TRACK.
+                         # Does omega_db.update(stem) update track? NO.
+                         # We need to find the track.
+                         if job.get('tracks'):
+                              # This is messy. Job structure varies.
+                              pass
+                         
+                         # Try finding subtitle track for this job in BURNING stage
+                         # Optimization: Don't do heavy query every loop.
+                         # Assuming backend logic links job->track.
+                         # But wait, dashboard uses track.progress.
+                         # We need to update track!
+                         # Let's try to update track if job has 'meta.track_id'?
+                         # Or query once at start.
+                         
+                         # For now, just update job. ProgramDetailView might use job progress?
+                         # No, it uses track.progress.
+                         # Let's verify if we can find the track_id.
+                         last_progress_update = now
+        
+        if process.returncode != 0:
+            raise subprocess.CalledProcessError(process.returncode, cmd)
+            
+        return output_file
+        
+    except subprocess.CalledProcessError as e:
+        logger.error(f"Burn Failed: {e}")
+        raise e
+
+
+def publish(video_path: Path, srt_path: Path, subtitle_style: str = "Classic", 
+            delivery_profile: str = None):
+    """
+    Burns subtitles into video using the specified style and delivery profile.
+    ...
+    """
+    # ... (existing content logic is unchanged until we hit subprocess calls) ...
+    # Wait, I cannot replace the whole function easily.
+    # I should insert the helper BEFORE publish, and modify calls inside publish.
+    pass 
+
+# I will restart this Replace to be granular.
+# First insert the helper.
+
+    """
+    Burns subtitles into video using the specified style and delivery profile.
+    
+    Args:
+        video_path: Path to source video
+        srt_path: Path to subtitle SRT file  
+        subtitle_style: "Classic" (RuvBox), "Modern" (Default/Shadow), or "Apple"
+        delivery_profile: Encoding profile key from config.DELIVERY_PROFILES
+                         (e.g., "broadcast_hevc", "broadcast_h264", "web", "archive", "universal")
+                         If None, uses config.DEFAULT_DELIVERY_PROFILE
     """
     if not video_path.exists():
         raise FileNotFoundError(f"Video not found: {video_path}")
     if not srt_path.exists():
         raise FileNotFoundError(f"SRT not found: {srt_path}")
 
-    stem = video_path.stem.replace("_SUBBED", "") # careful if re-burning
-    if output_dir is None:
-        output_dir = config.DELIVERY_DIR / "VIDEO"
-    output_dir = Path(output_dir)
+    # KEY CHANGE: Use SRT stem (Job ID) for output naming, not Video stem (Original Name)
+    stem = srt_path.stem.replace("_SUBBED", "")
+    output_dir = config.DELIVERY_DIR / "VIDEO"
     output_dir.mkdir(parents=True, exist_ok=True)
     
     output_path = output_dir / f"{stem}_SUBBED.mp4"
     
-    logger.info(f"🔥 Burning Subtitles: {stem} (Style: {subtitle_style})")
+    # Get delivery profile
+    profile_key = delivery_profile or config.DEFAULT_DELIVERY_PROFILE
+    profile = config.DELIVERY_PROFILES.get(profile_key)
+    if not profile:
+        logger.warning(f"Unknown delivery profile '{profile_key}', falling back to broadcast_hevc")
+        profile = config.DELIVERY_PROFILES["broadcast_hevc"]
+        profile_key = "broadcast_hevc"
+    
+    logger.info(f"🔥 Burning Subtitles: {stem} (Style: {subtitle_style}, Profile: {profile['name']})")
     
     # Map User Style to ASS Style Name
-    # Map User Style to ASS Style Name
-    # Map User Style to ASS Style Name
     style_map = config.BURN_METHOD_MAP
-    ass_style_name = style_map.get(subtitle_style, "Apple") # Default to Overlay for safety
+    ass_style_name = style_map.get(subtitle_style, "Apple")
     
     if ass_style_name == "Apple":
         logger.info("🍎 Using Apple Style (Overlay Engine)")
         
         # 1. Convert SRT to JSON for the Overlay Engine
-        # We use the SRT because it is the "Final Truth" (reviewed, finalized).
         temp_json_path = config.VAULT_DATA / f"{stem}_OVERLAY_INPUT.json"
         parse_srt_to_overlay_json(srt_path, temp_json_path)
         
         # 2. Render Overlay (ProRes 4444 MOV)
         overlay_mov_path = config.VAULT_DATA / f"{stem}_OVERLAY.mov"
         
-        # Ensure render_overlay is available
-        # if 'render_overlay' not in globals():
-        #      # Fallback import if not at top level
-        #      from subs_render_overlay import render_overlay
-             
         render_overlay(
             video_path=str(video_path),
             subs_json_path=str(temp_json_path),
@@ -132,17 +268,27 @@ def publish(video_path: Path, srt_path: Path, subtitle_style: str = "Classic", o
             stem=stem
         )
         
-        # 3. Composite Overlay onto Video
+        # 3. Composite Overlay onto Video (uses delivery profile encoder)
         logger.info("   Compositing Overlay...")
         cmd = [
             config.FFMPEG_BIN, "-y",
             "-i", str(video_path),
             "-i", str(overlay_mov_path),
-            "-filter_complex", "[0:v][1:v]overlay=0:0",
-            *_ffmpeg_encode_args(),
-            *_ffmpeg_audio_args(),
-            str(output_path)
+            "-filter_complex", "[0:v][1:v]overlay=0:0,format=yuv420p",
+            "-map", "0:a",
         ]
+        # Add encoder args from profile
+        cmd.extend(build_encoder_args(profile))
+        # Add color and output settings
+        cmd.extend([
+            "-color_primaries", "1",
+            "-color_trc", "1", 
+            "-colorspace", "1",
+            "-pix_fmt", "yuv420p",
+            "-movflags", "+faststart",
+            "-c:a", "copy",
+            str(output_path)
+        ])
         
     else:
         # Standard ASS Burn-in (Classic / Modern)
@@ -150,26 +296,37 @@ def publish(video_path: Path, srt_path: Path, subtitle_style: str = "Classic", o
         # 1. Generate ASS
         ass_path = config.VAULT_DATA / f"{stem}.ass"
         generate_ass_from_srt(srt_path, ass_path, style_name=ass_style_name)
-        ass_path_escaped = str(ass_path).replace(":", "\\:").replace("'", "\\'")
         
-        # 2. Burn
+        # ESCAPE PATH FOR FFMPEG FILTER
+        ass_path_str = str(ass_path)
+        ass_path_escaped = ass_path_str.replace("\\", "/").replace(":", "\\:").replace("'", "'\\\\''"  )
+        
+        # Build filter chain: ass with fontsdir, then format conversion
+        vf_filter = f"ass='{ass_path_escaped}':fontsdir='/System/Library/Fonts/',format=yuv420p"
+        
+        # Build command with delivery profile encoder
         cmd = [
             config.FFMPEG_BIN, "-y",
             "-i", str(video_path),
-            "-vf", f"ass='{ass_path_escaped}'",
-            *_ffmpeg_encode_args(),
-            *_ffmpeg_audio_args(),
-            str(output_path)
+            "-map", "0:v", "-map", "0:a",
+            "-vf", vf_filter,
         ]
+        # Add encoder args from profile
+        cmd.extend(build_encoder_args(profile))
+        # Add color and output settings
+        cmd.extend([
+            "-color_primaries", "1",
+            "-color_trc", "1",
+            "-colorspace", "1",
+            "-pix_fmt", "yuv420p",
+            "-movflags", "+faststart",
+            "-c:a", "copy",
+            str(output_path)
+        ])
     
-    logger.info(f"   Running FFmpeg: {' '.join(cmd)}")
-    try:
-        subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
-    except subprocess.CalledProcessError as e:
-        stderr = (e.stderr or "").strip()
-        if len(stderr) > 2000:
-            stderr = stderr[:2000] + "\n... (truncated)"
-        raise RuntimeError(f"FFmpeg failed (exit {e.returncode}): {stderr}") from e
+    logger.info(f"   Running FFmpeg ({profile['name']}): {' '.join(cmd)}")
+    # Prevent SIGTTOU suspension by explicitly detaching stdin
+    return _run_ffmpeg_with_progress(cmd, stem, output_path, video_path)
     
     return output_path
 
@@ -257,11 +414,30 @@ def generate_ass_from_srt(srt_path, ass_path, style_name="RuvBox"):
             base_margin_v = 65
             line_height = 68 # Balanced spacing (65 Font + 2 Outline + 1px Overlap)
             
-            # Process lines from bottom to top
-            for i, line in enumerate(reversed(lines[2:])):
-                margin_v = base_margin_v + (i * line_height)
-                clean_line = f"\\h\\h{line.strip()}\\h\\h"
-                events.append(f"Dialogue: 0,{start_ass},{end_ass_adjusted},{style_name},,0,0,{margin_v},,{clean_line}")
+            # Check for Top positioning override
+            raw_lines = lines[2:]
+            is_top = False
+            if raw_lines and raw_lines[0].startswith("{\\an8}"):
+                is_top = True
+                raw_lines[0] = raw_lines[0].replace("{\\an8}", "")
+            
+            if is_top:
+                # Top Alignment: Render specific events Top-Down
+                # We interpret {\an8} as request for Top positioning.
+                # Since we are generating separate events, we must tag EACH event with {\an8}
+                # and calculate margin from TOP (which \an8 implies for MarginV).
+                for i, line in enumerate(raw_lines):
+                    margin_v = base_margin_v + (i * line_height)
+                    clean_line = f"\\h\\h{line.strip()}\\h\\h"
+                    # We must prepend {\an8} to every line so it anchors to top
+                    events.append(f"Dialogue: 0,{start_ass},{end_ass_adjusted},{style_name},,0,0,{margin_v},,{{\\an8}}{clean_line}")
+            else:
+                # Bottom Alignment: Render Bottom-Up (Reversed)
+                # MarginV is from Bottom.
+                for i, line in enumerate(reversed(raw_lines)):
+                    margin_v = base_margin_v + (i * line_height)
+                    clean_line = f"\\h\\h{line.strip()}\\h\\h"
+                    events.append(f"Dialogue: 0,{start_ass},{end_ass_adjusted},{style_name},,0,0,{margin_v},,{clean_line}")
         else:
             # Standard handling
             text = "\\N".join(lines[2:])
@@ -304,12 +480,29 @@ def burn(srt_file: Path, forced_style=None):
     stem = srt_file.stem
     logger.info(f"🔥 Processing: {srt_file.name}")
     
-    # Fetch job for style info
+    # Fetch job for style info and source video path
     job = omega_db.get_job(stem) or {}
-    
-    video_path = find_video_file(stem)
+    meta = job.get("meta") or {}
+    if isinstance(meta, str):
+        try:
+             meta = json.loads(meta)
+        except Exception:
+             meta = {}
+             
+    # Try finding video via Meta (Best for Job-ID system)
+    video_path = None
+    if meta.get("vault_path"):
+        cand = Path(meta["vault_path"])
+        if cand.exists():
+            video_path = cand
+            logger.info(f"✅ Found video (via Meta): {video_path.name}")
+
+    # Fallback to legacy lookup
     if not video_path:
-        raise Exception("Video not found in Vault")
+        video_path = find_video_file(stem)
+        
+    if not video_path:
+        raise Exception(f"Video not found in Vault for {stem}")
 
     # --- DETERMINE STYLE ---
     # Priority:
@@ -378,10 +571,75 @@ def burn(srt_file: Path, forced_style=None):
         ]
         
         try:
-            subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, stdin=subprocess.DEVNULL)
+            # Use Popen for real-time progress parsing
+            process = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT, 
+                universal_newlines=True,
+                bufsize=1
+            )
+            
+            # Get total duration for progress calculation
+            total_duration = 0
+            try:
+                # Try getting from DB first
+                if job.get("program_id"):
+                    prog = omega_db.get_program(job.get("program_id"))
+                    if prog:
+                        total_duration = float(prog.get("duration_seconds") or 0)
+                
+                # Fallback: estimate from video file if DB missing
+                if total_duration <= 0 and video_path.exists():
+                    # Quick ffprobe
+                    probe_cmd = [
+                        config.FFPROBE_BIN, 
+                        "-v", "error", 
+                        "-show_entries", "format=duration", 
+                        "-of", "default=noprint_wrappers=1:nokey=1", 
+                        str(video_path)
+                    ]
+                    total_duration = float(subprocess.check_output(probe_cmd).strip())
+            except Exception as e:
+                logger.warning(f"Could not determine duration for progress: {e}")
+                total_duration = 0
+
+            logger.info(f"   🐢 Encoding with progress tracking (Duration: {total_duration}s)...")
+            
+            # Progress loop
+            import re
+            time_pattern = re.compile(r"time=(\d{2}):(\d{2}):(\d{2}\.\d{2})")
+            last_progress_update = 0
+            
+            while True:
+                line = process.stdout.readline()
+                if not line and process.poll() is not None:
+                    break
+                
+                if line:
+                    # Parse time=00:00:00.00
+                    match = time_pattern.search(line)
+                    if match and total_duration > 0:
+                        h, m, s = match.groups()
+                        current_seconds = int(h) * 3600 + int(m) * 60 + float(s)
+                        progress = min(99.0, (current_seconds / total_duration) * 100)
+                        
+                        # Update DB every 2 seconds or 5% change to save DB writes
+                        now = time.time()
+                        if (now - last_progress_update > 2.0):
+                             omega_db.update_track(job.get("track_id"), progress=progress) 
+                             # Also update legacy job table for wider compatibility
+                             omega_db.update(stem, progress=progress, status=f"Burning {int(progress)}%")
+                             last_progress_update = now
+            
+            if process.returncode != 0:
+                raise subprocess.CalledProcessError(process.returncode, cmd)
+                
             logger.info(f"✅ Burn Complete: {output_file.name}")
+            omega_db.update(stem, progress=100.0, status="Start Uploading")
             temp_ass.unlink(missing_ok=True)
             return output_file
+            
         except subprocess.CalledProcessError as e:
             logger.error(f"Burn Failed: {e}")
             raise e

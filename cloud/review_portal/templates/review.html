@@ -1,0 +1,416 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="theme-color" content="#08090A">
+    <title>Omega Review - {{ job.program_name }}</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+    <!-- Player.js for Bunny Stream video control -->
+    <script src="https://cdn.jsdelivr.net/npm/player.js@0.1.0/dist/player.min.js"></script>
+</head>
+
+<body>
+    <!-- Header -->
+    <header class="header">
+        <div class="header-left">
+            <span class="logo">Omega Review</span>
+            <div class="job-info">
+                <span class="job-title">{{ job.program_name }}</span>
+                <span class="language-badge">{{ job.target_language }}</span>
+            </div>
+        </div>
+        <div class="header-right">
+            <div class="progress-info">
+                <div class="progress-bar">
+                    <div class="progress-fill" id="progressFill" style="width: 0%"></div>
+                </div>
+                <span class="progress-text" id="progressText">0 / {{ job.subtitle_count }}</span>
+            </div>
+        </div>
+    </header>
+
+    <!-- Quality Report -->
+    {% if job.editor_report %}
+    <div class="quality-report">
+        <span
+            class="rating-badge {{ 'excellent' if job.editor_report.rating >= 9 else ('good' if job.editor_report.rating >= 7 else 'fair') }}">
+            {{ job.editor_report.rating | default('—') }}/10
+        </span>
+        <span class="rating-summary">"{{ job.editor_report.summary | default('') | truncate(100) }}"</span>
+    </div>
+    {% endif %}
+
+    <!-- Video Preview (Bunny Stream) -->
+    {% if job.has_video and job.bunny_embed_url %}
+    <div class="video-preview">
+        <div class="video-container">
+            <iframe id="videoPlayer"
+                src="{{ job.bunny_embed_url }}?autoplay=false&loop=false&muted=false&preload=true&responsive=true"
+                loading="lazy" style="border:none; position:absolute; top:0; left:0; width:100%; height:100%;"
+                allow="accelerometer; autoplay; encrypted-media; gyroscope; picture-in-picture" allowfullscreen>
+            </iframe>
+        </div>
+        <div class="video-controls">
+            <button class="btn btn-small" onclick="toggleVideoSize()">
+                <span id="videoSizeIcon">📺</span> Toggle Size
+            </button>
+            <span class="video-hint">Click a subtitle to seek to that time</span>
+        </div>
+    </div>
+    {% else %}
+    <div class="no-video-notice">
+        <span>🎧 Audio-only mode — Click play buttons to hear segments</span>
+    </div>
+    {% endif %}
+
+    <!-- Main Content -->
+    <main class="main-content">
+        <div class="subtitle-list" id="subtitleList">
+            {% for segment in job.translation.segments %}
+            <div class="subtitle-card" data-index="{{ loop.index0 }}" data-status="pending">
+                <div class="card-header">
+                    <span class="timestamp">{{ segment.start | default('0:00') }} → {{ segment.end | default('0:00')
+                        }}</span>
+                    <button class="audio-btn" onclick="playAudio({{ loop.index0 }})" title="Play audio">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                            stroke-linecap="round" stroke-linejoin="round">
+                            <polygon points="5 3 19 12 5 21 5 3"></polygon>
+                        </svg>
+                    </button>
+                </div>
+
+                <div class="card-content">
+                    <div class="original-text">
+                        {% if job.skeleton.segments[loop.index0] %}
+                        {{ job.skeleton.segments[loop.index0].text | default('') }}
+                        {% endif %}
+                    </div>
+                    <textarea class="translation-input" data-index="{{ loop.index0 }}"
+                        placeholder="Translation...">{{ segment.text | default('') }}</textarea>
+                </div>
+
+                <div class="card-actions">
+                    <button class="action-btn approve" onclick="approveOne({{ loop.index0 }})" title="Approve">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                            stroke-linecap="round" stroke-linejoin="round">
+                            <polyline points="20 6 9 17 4 12"></polyline>
+                        </svg>
+                    </button>
+                    <button class="action-btn flag" onclick="flagOne({{ loop.index0 }})" title="Flag">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                            stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"></path>
+                            <line x1="4" y1="22" x2="4" y2="15"></line>
+                        </svg>
+                    </button>
+                    <button class="action-btn delete" onclick="deleteOne({{ loop.index0 }})" title="Delete">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                            stroke-linecap="round" stroke-linejoin="round">
+                            <polyline points="3 6 5 6 21 6"></polyline>
+                            <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2">
+                            </path>
+                        </svg>
+                    </button>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+    </main>
+
+    <!-- Footer -->
+    <footer class="footer">
+        <div class="footer-left">
+            <button class="btn btn-secondary" onclick="saveDraft()">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                    stroke-linejoin="round">
+                    <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"></path>
+                    <polyline points="17 21 17 13 7 13 7 21"></polyline>
+                    <polyline points="7 3 7 8 15 8"></polyline>
+                </svg>
+                Save Draft
+            </button>
+            <span class="autosave-status" id="autosaveStatus"></span>
+        </div>
+        <div class="footer-right">
+            <button class="btn btn-warning" onclick="showFlagged()">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                    stroke-linejoin="round">
+                    <path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"></path>
+                    <line x1="4" y1="22" x2="4" y2="15"></line>
+                </svg>
+                Flagged (<span id="flaggedCount">0</span>)
+            </button>
+            <button class="btn btn-primary" onclick="approveAll()">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                    stroke-linejoin="round">
+                    <polyline points="20 6 9 17 4 12"></polyline>
+                </svg>
+                Approve All
+            </button>
+        </div>
+    </footer>
+
+    <!-- Modal -->
+    <div class="modal" id="celebrationModal">
+        <div class="modal-content">
+            <div class="modal-icon">✓</div>
+            <h2>Review Complete</h2>
+            <p class="modal-stats" id="celebrationStats"></p>
+            <p class="modal-message">Video will be processed within 30 minutes.</p>
+            <button class="btn btn-primary" onclick="closeModal()">Done</button>
+        </div>
+    </div>
+
+    <!-- Audio -->
+    <audio id="audioPlayer"></audio>
+
+    <script>
+        const jobId = "{{ job.job_id }}";
+        const totalCount = {{ job.subtitle_count }};
+        let approvedCount = 0;
+        let flaggedCount = 0;
+        let deletedIndices = new Set();
+        let startTime = Date.now();
+        let hasUnsavedChanges = false;
+
+        // Build segment start times as strings from the data
+        const segmentStartStrings = [
+            {% for segment in job.translation.segments %}
+        "{{ segment.start | default('0:00') }}",
+            {% endfor %}
+        ];
+
+        // Parse time string (MM:SS or HH:MM:SS) to seconds
+        function parseTimeToSeconds(timeStr) {
+            if (!timeStr) return 0;
+            const parts = timeStr.split(':').map(Number);
+            if (parts.length === 3) {
+                return parts[0] * 3600 + parts[1] * 60 + parts[2];
+            } else if (parts.length === 2) {
+                return parts[0] * 60 + parts[1];
+            }
+            return parseFloat(timeStr) || 0;
+        }
+
+        // Video player (Bunny Stream via Player.js)
+        let videoPlayer = null;
+
+        document.addEventListener('DOMContentLoaded', () => {
+            updateProgress();
+            startAutoSave();
+            setupKeyboardShortcuts();
+            setupChangeTracking();
+            initVideoPlayer();
+            setupTimestampClicks();
+        });
+
+        function initVideoPlayer() {
+            const iframe = document.getElementById('videoPlayer');
+            if (iframe && typeof playerjs !== 'undefined') {
+                videoPlayer = new playerjs.Player(iframe);
+                videoPlayer.on('ready', () => {
+                    console.log('Bunny video player ready');
+                });
+            }
+        }
+
+        function seekToSegment(index) {
+            if (!videoPlayer) return;
+            const timeStr = segmentStartStrings[index] || '0:00';
+            const time = parseTimeToSeconds(timeStr);
+            videoPlayer.setCurrentTime(time);
+            videoPlayer.play();
+
+            // Highlight the current segment
+            document.querySelectorAll('.subtitle-card').forEach(c => c.classList.remove('playing'));
+            const card = document.querySelector(`[data-index="${index}"]`);
+            if (card) card.classList.add('playing');
+        }
+
+        function setupTimestampClicks() {
+            document.querySelectorAll('.timestamp').forEach((ts, index) => {
+                ts.style.cursor = 'pointer';
+                ts.title = 'Click to jump to this time in video';
+                ts.addEventListener('click', () => seekToSegment(index));
+            });
+        }
+
+        function toggleVideoSize() {
+            const preview = document.querySelector('.video-preview');
+            if (preview) {
+                preview.classList.toggle('collapsed');
+                const icon = document.getElementById('videoSizeIcon');
+                if (icon) {
+                    icon.textContent = preview.classList.contains('collapsed') ? '📺' : '🔲';
+                }
+            }
+        }
+
+        function setupChangeTracking() {
+            document.querySelectorAll('.translation-input').forEach(input => {
+                input.addEventListener('input', () => hasUnsavedChanges = true);
+            });
+            window.addEventListener('beforeunload', (e) => {
+                if (hasUnsavedChanges) {
+                    e.preventDefault();
+                    e.returnValue = '';
+                }
+            });
+        }
+
+        function updateProgress() {
+            const cards = document.querySelectorAll('.subtitle-card:not([data-deleted="true"])');
+            const approved = document.querySelectorAll('.subtitle-card[data-status="approved"]').length;
+            const flagged = document.querySelectorAll('.subtitle-card[data-status="flagged"]').length;
+
+            approvedCount = approved;
+            flaggedCount = flagged;
+
+            const total = cards.length;
+            const reviewed = approved + flagged;
+            const percent = total > 0 ? (reviewed / total) * 100 : 0;
+
+            document.getElementById('progressFill').style.width = percent + '%';
+            document.getElementById('progressText').textContent = `${reviewed} / ${total}`;
+            document.getElementById('flaggedCount').textContent = flagged;
+        }
+
+        async function playAudio(index) {
+            const audio = document.getElementById('audioPlayer');
+            audio.src = `/api/audio/${jobId}/${index}`;
+            try { await audio.play(); } catch (e) { console.log('Audio unavailable'); }
+        }
+
+        function approveOne(index) {
+            const card = document.querySelector(`[data-index="${index}"]`);
+            card.dataset.status = 'approved';
+            card.classList.add('approved');
+            card.classList.remove('flagged');
+            hasUnsavedChanges = true;
+            updateProgress();
+
+            const next = card.nextElementSibling;
+            if (next && !next.dataset.deleted) {
+                next.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            }
+        }
+
+        function flagOne(index) {
+            const card = document.querySelector(`[data-index="${index}"]`);
+            card.dataset.status = 'flagged';
+            card.classList.add('flagged');
+            card.classList.remove('approved');
+            hasUnsavedChanges = true;
+            updateProgress();
+        }
+
+        function deleteOne(index) {
+            if (!confirm('Delete this line?')) return;
+            const card = document.querySelector(`[data-index="${index}"]`);
+            card.dataset.deleted = 'true';
+            card.style.display = 'none';
+            deletedIndices.add(index);
+            hasUnsavedChanges = true;
+            updateProgress();
+        }
+
+        function collectSegments() {
+            const segments = [];
+            document.querySelectorAll('.subtitle-card:not([data-deleted="true"])').forEach(card => {
+                const index = parseInt(card.dataset.index);
+                const textarea = card.querySelector('.translation-input');
+                segments.push({ index, text: textarea.value, status: card.dataset.status });
+            });
+            return segments;
+        }
+
+        async function saveDraft() {
+            const status = document.getElementById('autosaveStatus');
+            status.textContent = 'Saving...';
+            try {
+                const res = await fetch(`/api/job/${jobId}/save`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ segments: collectSegments() })
+                });
+                if (res.ok) {
+                    status.textContent = 'Saved';
+                    hasUnsavedChanges = false;
+                    setTimeout(() => status.textContent = '', 2000);
+                }
+            } catch (e) {
+                status.textContent = 'Error';
+            }
+        }
+
+        function startAutoSave() {
+            setInterval(() => { if (hasUnsavedChanges) saveDraft(); }, 30000);
+        }
+
+        async function approveAll() {
+            document.querySelectorAll('.subtitle-card:not([data-deleted="true"]):not([data-status="approved"])').forEach(card => {
+                if (card.dataset.status !== 'flagged') {
+                    card.dataset.status = 'approved';
+                    card.classList.add('approved');
+                }
+            });
+            updateProgress();
+
+            if (flaggedCount > 0 && !confirm(`${flaggedCount} flagged items. Continue?`)) return;
+
+            try {
+                const res = await fetch(`/api/job/${jobId}/approve`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ segments: collectSegments(), reviewer_name: 'Reviewer' })
+                });
+                if (res.ok) {
+                    hasUnsavedChanges = false;
+                    showCelebration();
+                }
+            } catch (e) {
+                alert('Error submitting');
+            }
+        }
+
+        function showCelebration() {
+            const elapsed = Math.round((Date.now() - startTime) / 60000);
+            const reviewed = totalCount - deletedIndices.size;
+            document.getElementById('celebrationStats').textContent = `${reviewed} lines reviewed in ${elapsed} min`;
+            document.getElementById('celebrationModal').classList.add('show');
+        }
+
+        function closeModal() {
+            document.getElementById('celebrationModal').classList.remove('show');
+        }
+
+        function showFlagged() {
+            const first = document.querySelector('.subtitle-card.flagged');
+            if (first) first.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            else alert('No flagged items');
+        }
+
+        function setupKeyboardShortcuts() {
+            document.addEventListener('keydown', (e) => {
+                if (e.target.tagName === 'TEXTAREA') {
+                    if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
+                        e.preventDefault();
+                        approveOne(parseInt(e.target.dataset.index));
+                    }
+                    return;
+                }
+                if ((e.metaKey || e.ctrlKey) && e.key === 's') {
+                    e.preventDefault();
+                    saveDraft();
+                }
+            });
+        }
+    </script>
+</body>
+
+</html>

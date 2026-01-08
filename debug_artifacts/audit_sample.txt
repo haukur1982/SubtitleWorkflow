@@ -1,0 +1,160 @@
+--- SEG 0 ---
+SRC: Hallelujah.
+TRN: (MUSIC)
+
+--- SEG 1 ---
+SRC: Hallelujah.
+TRN: (MUSIC)
+
+--- SEG 2 ---
+SRC: Thank you, God.
+TRN: (MUSIC)
+
+--- SEG 3 ---
+SRC: Bless the Lord.
+TRN: (MUSIC)
+
+--- SEG 4 ---
+SRC: God is the strength of our hearts.
+TRN: (MUSIC)
+
+--- SEG 5 ---
+SRC: He's the strength of our lives.
+TRN: (MUSIC)
+
+--- SEG 6 ---
+SRC: We thank God for that today.
+TRN: Við þökkum Guði fyrir það í dag.
+
+--- SEG 7 ---
+SRC: What a blessing.
+TRN: Hvílík blessun.
+
+--- SEG 8 ---
+SRC: Thank you, choir.
+TRN: Takk, kór.
+
+--- SEG 9 ---
+SRC: Boy, what a tremendous, from opening prayer all the way to now, we sense his presence here.
+TRN: Vá, hvílík stórkostleg stund, frá upphafsbæn og allt til þessa augnabliks, finnum við nærveru hans hér.
+
+--- SEG 10 ---
+SRC: We're so happy that you've made it.
+TRN: Við erum svo glöð að þið komust.
+
+--- SEG 11 ---
+SRC: For those that are watching around the country and around the world, we've had a snowstorm here.
+TRN: Fyrir ykkur sem horfið á um allt land og um allan heim, þá hefur verið snjóstormur hér.
+
+--- SEG 12 ---
+SRC: It's cold outside, but I'm telling you, Jesus is here today doing some tremendous things.
+TRN: Það er kalt úti, en ég segi ykkur, Jesús er hér í dag að gera stórkostlega hluti.
+
+--- SEG 13 ---
+SRC: We want to welcome all those that are watching from around the country and around the world.
+TRN: Við viljum bjóða ykkur öll velkomin sem horfið á um allt land og um allan heim.
+
+--- SEG 14 ---
+SRC: What a joy to have every one of you that are watching from around the tri-state area, around the United States and around the world.
+TRN: Hvílík gleði að hafa ykkur öll sem horfið á frá þriggja ríkja svæðinu, um öll Bandaríkin og um allan heim.
+
+--- SEG 15 ---
+SRC: I want to welcome all those that are live with us that are watching from South Africa, Kenya, Togo.
+TRN: Ég vil bjóða öll velkomin sem eru í beinni með okkur frá Suður-Afríku, Kenía og Tógó.
+
+--- SEG 16 ---
+SRC: We say hello to Nigeria and Namibia, Seychelles and Eswatini, Senegal, Uganda and Ethiopia.
+TRN: Við heilsum Nígeríu og Namibíu, Seychelles-eyjum og Esvatíní, Senegal, Úganda og Eþíópíu.
+
+--- SEG 17 ---
+SRC: We welcome India, Malaysia, South Korea, Thailand and the Philippines.
+TRN: Við bjóðum Indland, Malasíu, Suður-Kóreu, Taíland og Filippseyjar velkomin.
+
+--- SEG 18 ---
+SRC: We say hello to Hong Kong, Indonesia, Singapore, Turkey, Myanmar, which is Burma.
+TRN: Við heilsum Hong Kong, Indónesíu, Singapúr, Tyrklandi, Mjanmar, sem er Búrma.
+
+--- SEG 19 ---
+SRC: We welcome Israel.
+TRN: Við bjóðum Ísrael velkomið.
+
+--- SEG 20 ---
+SRC: We say shalom to Israel.
+TRN: Við segjum shalom við Ísrael.
+
+--- SEG 21 ---
+SRC: And we're praying that God would begin to bring peace to Jerusalem.
+TRN: Og við biðjum þess að Guð byrji að færa Jerúsalem frið.
+
+--- SEG 22 ---
+SRC: We're praying for the peace of Jerusalem, for the United Arab Emirates.
+TRN: Við biðjum fyrir friði í Jerúsalem, fyrir Sameinuðu arabísku furstadæmunum.
+
+--- SEG 23 ---
+SRC: We also welcome Australia.
+TRN: Við bjóðum einnig Ástralíu velkomna.
+
+--- SEG 24 ---
+SRC: In just a moment, we're going to begin to pray.
+TRN: Eftir örstutta stund munum við byrja að biðja.
+
+--- SEG 25 ---
+SRC: There was a tragic shooting on Hanukkah.
+TRN: Það varð hörmuleg skotárás á Hanukkah.
+
+--- SEG 26 ---
+SRC: Their 11 lives were lost as a gunman opened up for some precious Jewish people celebrating at Bondi Beach, and they killed 11 Jewish people.
+TRN: Þar glötuðust 11 mannslíf þegar byssumaður hóf skothríð á dýrmætt gyðingafólk sem fagnaði á Bondi Beach og drap 11 gyðinga.
+
+--- SEG 27 ---
+SRC: We're going to be praying in just a moment for you, Australia, but especially for the Jewish people.
+TRN: Við munum biðja eftir augnablik fyrir ykkur, Ástralía, en sérstaklega fyrir gyðingaþjóðina.
+
+--- SEG 28 ---
+SRC: We also thank God for New Zealand, the UK, Northern Ireland, Scotland, Lithuania.
+TRN: Við þökkum Guði einnig fyrir Nýja-Sjáland, Bretland, Norður-Írland, Skotland og Litháen.
+
+--- SEG 29 ---
+SRC: We say hello to Poland, France, Norway, Sweden, Ireland, Spain, Germany, and Austria.
+TRN: Við heilsum Póllandi, Frakklandi, Noregi, Svíþjóð, Írlandi, Spáni, Þýskalandi og Austurríki.
+
+--- SEG 30 ---
+SRC: We welcome Hungary, Romania, the Czech Republic, Belgium, the Netherlands, Denmark, Albania, we say a little Bulgaria, Greece, Portugal, and Finland.
+TRN: Við bjóðum Ungverjaland, Rúmeníu, Tékkland, Belgíu, Holland, Danmörku, Albaníu, við heilsum Búlgaríu, Grikklandi, Portúgal og Finnlandi.
+
+--- SEG 31 ---
+SRC: Our northern neighbors, Canada.
+TRN: Norðurnágranna okkar, Kanada.
+
+--- SEG 32 ---
+SRC: We also welcome the Navajo Nation that's watching.
+TRN: Við bjóðum einnig Navajo-þjóðina velkomna sem horfir á.
+
+--- SEG 33 ---
+SRC: Mexico, Haiti, Barbados, Guatemala, Trinidad and Tobago, Jamaica, French Guiana, Cayman Islands, Honduras, Panama, Cuba, Grenada, Suriname, Bolivia, Chile,
+TRN: Mexíkó, Haítí, Barbados, Gvatemala, Trínidad og Tóbagó, Jamaíka, Franska Gvæjana, Cayman-eyjar, Hondúras, Panama, Kúbu, Grenada, Súrínam, Bólivíu, Chile,
+
+--- SEG 34 ---
+SRC: Colombia, Brazil, Puerto Rico, and the Dominican Republic.
+TRN: Kólumbíu, Brasilíu, Púertó Ríkó og Dóminíska lýðveldið.
+
+--- SEG 35 ---
+SRC: We welcome all those that are watching.
+TRN: Við bjóðum alla velkomna sem horfa á.
+
+--- SEG 36 ---
+SRC: We welcome some 45 states that are watching around the U.S., and this is always my favorite part.
+TRN: Við bjóðum um 45 fylki velkomin sem horfa á um öll Bandaríkin, og þetta er alltaf uppáhaldshlutinn minn.
+
+--- SEG 37 ---
+SRC: We welcome all the universities that are watching.
+TRN: Við bjóðum alla háskólana velkomna sem horfa á.
+
+--- SEG 38 ---
+SRC: We welcome the University of Delaware, Old Dominion University, Houghton University, the University of Toronto.
+TRN: Við bjóðum Háskólann í Delaware, Old Dominion háskóla, Houghton háskóla og Háskólann í Toronto velkomna.
+
+--- SEG 39 ---
+SRC: We welcome our Bible school, Summit International School of the Ministry.
+TRN: Við bjóðum biblíuskólann okkar, Summit International School of Ministry, velkominn.
+

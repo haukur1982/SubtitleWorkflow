@@ -1,32 +1,139 @@
 """
-Audio Classifier using inaSpeechSegmenter
+Audio Classifier - Multi-Signal Fusion Architecture
 
-Provides professional-grade speech vs music detection for broadcast subtitling.
-Uses CNN-based audio analysis (ranked #1 on French TV/Radio benchmark).
+Provides broadcast-grade speech vs music/singing detection for subtitle gating.
+Uses a multi-signal approach for reliability:
+
+    Signal 1: webrtcvad (Voice Activity Detection) - fast, always available
+    Signal 2: AssemblyAI word confidence - leverages transcription metadata
+    Signal 3: inaSpeechSegmenter (CNN) - speech vs singing vs music (gold standard)
+
+The decision engine combines these signals to correctly handle:
+    - Shofar/organ intros (no subtitle)
+    - Pastor speaking over intro music (subtitle)
+    - Worship songs (no subtitle)
+    - Regular sermon speech (subtitle)
 
 Usage:
-    from workers.audio_classifier import get_music_ranges, is_music_timestamp
+    from workers.audio_classifier import classify_segments, get_music_ranges
     
+    # For segment-level classification
+    segments = classify_segments(segments, audio_path)
+    
+    # For time-range queries
     music_ranges = get_music_ranges(audio_path)
-    # Returns: [(0.0, 35.2), (120.8, 180.5), ...]
-    
-    if is_music_timestamp(10.5, music_ranges):
-        segment['text'] = '(MUSIC)'
-
-Installation:
-    pip install inaSpeechSegmenter
-    
-Note: Requires TensorFlow. Recommended to run with GPU for speed.
 """
 
+import os
 import logging
 from pathlib import Path
-from typing import List, Tuple, Optional
+from typing import List, Tuple, Optional, Dict
+import config
 
 logger = logging.getLogger("OmegaManager.AudioClassifier")
 
+# --- Classification Mode (from config) ---
+# "full" = All 3 signals (default)
+# "light" = webrtcvad + confidence only (no TensorFlow)
+# "off" = No classification (subtitle everything)
+CLASSIFICATION_MODE = os.environ.get("OMEGA_AUDIO_CLASSIFICATION_MODE", "full").strip().lower()
+
+# --- Signal 1: webrtcvad (Voice Activity Detection) ---
+_vad = None
+_vad_available = None
+
+def _check_vad_available() -> bool:
+    """Check if webrtcvad is available."""
+    global _vad_available
+    if _vad_available is not None:
+        return _vad_available
+    
+    try:
+        import webrtcvad
+        _vad_available = True
+        return True
+    except ImportError:
+        _vad_available = False
+        logger.warning("⚠️ webrtcvad not installed. VAD fallback disabled.")
+        return False
+
+
+def get_vad(aggressiveness: int = 3):
+    """
+    Get webrtcvad instance.
+    
+    Args:
+        aggressiveness: 0-3 (higher = more aggressive filtering of non-speech)
+    """
+    global _vad
+    
+    if not _check_vad_available():
+        return None
+    
+    if _vad is None:
+        import webrtcvad
+        _vad = webrtcvad.Vad(aggressiveness)
+        logger.info(f"🎤 webrtcvad initialized (aggressiveness={aggressiveness})")
+    
+    return _vad
+
+
+def vad_has_speech(audio_path: Path, start: float, end: float, threshold: float = 0.5) -> Optional[bool]:
+    """
+    Check if a time range contains speech using webrtcvad.
+    
+    Args:
+        audio_path: Path to audio file (must be 16kHz mono PCM)
+        start: Start time in seconds
+        end: End time in seconds
+        threshold: Fraction of frames that must be speech (0.0-1.0)
+    
+    Returns:
+        True if speech detected, False if not, None if VAD unavailable
+    """
+    vad = get_vad()
+    if vad is None:
+        return None
+    
+    try:
+        import soundfile as sf
+        
+        # Read the specific segment
+        # webrtcvad requires 16kHz mono PCM
+        audio, sample_rate = sf.read(str(audio_path), start=int(start * 16000), stop=int(end * 16000))
+        
+        if sample_rate != 16000:
+            logger.warning(f"VAD requires 16kHz audio, got {sample_rate}Hz. Skipping VAD.")
+            return None
+        
+        # Process in 30ms frames (480 samples at 16kHz)
+        frame_size = 480
+        speech_frames = 0
+        total_frames = 0
+        
+        for i in range(0, len(audio) - frame_size, frame_size):
+            frame = audio[i:i + frame_size]
+            # Convert to 16-bit PCM bytes
+            frame_bytes = (frame * 32767).astype('int16').tobytes()
+            if vad.is_speech(frame_bytes, sample_rate):
+                speech_frames += 1
+            total_frames += 1
+        
+        if total_frames == 0:
+            return None
+        
+        speech_ratio = speech_frames / total_frames
+        return speech_ratio >= threshold
+        
+    except Exception as e:
+        logger.debug(f"VAD check failed: {e}")
+        return None
+
+
+# --- Signal 3: inaSpeechSegmenter ---
 _segmenter = None
 _segmenter_available = None
+_segmenter_cache: Dict[str, List[Tuple[str, float, float]]] = {}
 
 
 def _check_segmenter_available() -> bool:
@@ -35,13 +142,23 @@ def _check_segmenter_available() -> bool:
     if _segmenter_available is not None:
         return _segmenter_available
     
+    if CLASSIFICATION_MODE == "off":
+        _segmenter_available = False
+        logger.info("🔇 Audio classification disabled (OMEGA_AUDIO_CLASSIFICATION_MODE=off)")
+        return False
+    
+    if CLASSIFICATION_MODE == "light":
+        _segmenter_available = False
+        logger.info("⚡ Using light classification mode (no TensorFlow)")
+        return False
+    
     try:
         from inaSpeechSegmenter import Segmenter
         _segmenter_available = True
         return True
     except ImportError:
         _segmenter_available = False
-        logger.warning("⚠️ inaSpeechSegmenter not installed. Audio classification disabled.")
+        logger.warning("⚠️ inaSpeechSegmenter not installed. Falling back to VAD-only mode.")
         logger.warning("   Install with: pip install inaSpeechSegmenter")
         return False
 
@@ -69,18 +186,23 @@ def get_segmenter():
 
 def classify_audio(audio_path: Path) -> List[Tuple[str, float, float]]:
     """
-    Classify audio into speech/music/noise segments.
+    Classify audio into speech/music/noise segments using inaSpeechSegmenter.
     
     Args:
         audio_path: Path to audio file (any format supported by ffmpeg)
     
     Returns:
         List of (label, start_seconds, end_seconds) tuples.
-        Labels: 'speech', 'music', 'noise', 'male', 'female'
+        Labels: 'speech', 'music', 'noise'
         
     Raises:
         RuntimeError: If inaSpeechSegmenter is not available
     """
+    # Check cache first
+    cache_key = str(audio_path)
+    if cache_key in _segmenter_cache:
+        return _segmenter_cache[cache_key]
+    
     segmenter = get_segmenter()
     if segmenter is None:
         raise RuntimeError("inaSpeechSegmenter not available")
@@ -94,6 +216,10 @@ def classify_audio(audio_path: Path) -> List[Tuple[str, float, float]]:
         counts[label] = counts.get(label, 0) + 1
     
     logger.info(f"✅ Classification complete: {counts}")
+    
+    # Cache the result
+    _segmenter_cache[cache_key] = result
+    
     return result
 
 
@@ -116,16 +242,27 @@ def get_music_ranges(audio_path: Path) -> List[Tuple[float, float]]:
         return []
 
 
+def get_speech_ranges(audio_path: Path) -> List[Tuple[float, float]]:
+    """
+    Get time ranges that are speech.
+    
+    Args:
+        audio_path: Path to audio file
+        
+    Returns:
+        List of (start_seconds, end_seconds) tuples for speech segments.
+    """
+    try:
+        segments = classify_audio(audio_path)
+        return [(start, end) for label, start, end in segments if label in ('speech', 'male', 'female')]
+    except Exception as e:
+        logger.warning(f"⚠️ Audio classification failed: {e}")
+        return []
+
+
 def is_music_timestamp(timestamp: float, music_ranges: List[Tuple[float, float]]) -> bool:
     """
     Check if a timestamp falls within a music range.
-    
-    Args:
-        timestamp: Time in seconds
-        music_ranges: List of (start, end) tuples from get_music_ranges()
-        
-    Returns:
-        True if timestamp is within any music range
     """
     for start, end in music_ranges:
         if start <= timestamp <= end:
@@ -133,21 +270,97 @@ def is_music_timestamp(timestamp: float, music_ranges: List[Tuple[float, float]]
     return False
 
 
+def is_speech_timestamp(timestamp: float, speech_ranges: List[Tuple[float, float]]) -> bool:
+    """
+    Check if a timestamp falls within a speech range.
+    """
+    for start, end in speech_ranges:
+        if start <= timestamp <= end:
+            return True
+    return False
+
+
+# --- Decision Engine: Multi-Signal Fusion ---
+
+def should_subtitle_segment(
+    segment: dict,
+    audio_path: Optional[Path] = None,
+    music_ranges: Optional[List[Tuple[float, float]]] = None,
+    speech_ranges: Optional[List[Tuple[float, float]]] = None,
+    confidence_threshold: float = 0.6
+) -> Tuple[bool, str]:
+    """
+    Determine if a segment should be subtitled using multi-signal fusion.
+    
+    Decision Logic:
+        1. If inaSpeechSegmenter says "speech" → subtitle
+        2. If inaSpeechSegmenter says "music" AND confidence < threshold → skip (singing)
+        3. If inaSpeechSegmenter says "music" AND confidence >= threshold → subtitle (speech over music)
+        4. If classifier unavailable, fallback to confidence-only
+    
+    Args:
+        segment: Segment dict with 'start', 'end', 'text', optional 'words' with 'confidence'
+        audio_path: Path to audio file (for VAD fallback)
+        music_ranges: Pre-computed music ranges (avoids re-classification)
+        speech_ranges: Pre-computed speech ranges
+        confidence_threshold: Min average word confidence to subtitle during music
+    
+    Returns:
+        Tuple of (should_subtitle: bool, reason: str)
+    """
+    start = segment.get('start', 0)
+    end = segment.get('end', 0)
+    mid = (start + end) / 2
+    
+    # Signal 2: Word Confidence (if available)
+    words = segment.get('words', [])
+    avg_confidence = 1.0  # Default high confidence
+    if words and isinstance(words, list):
+        confidences = [w.get('confidence', 1.0) for w in words if isinstance(w, dict)]
+        if confidences:
+            avg_confidence = sum(confidences) / len(confidences)
+    
+    # Signal 3: inaSpeechSegmenter classification
+    if speech_ranges is not None:
+        if is_speech_timestamp(mid, speech_ranges):
+            return True, "speech_detected"
+    
+    if music_ranges is not None:
+        if is_music_timestamp(mid, music_ranges):
+            # In a music region - check confidence
+            if avg_confidence < confidence_threshold:
+                return False, f"low_confidence_singing ({avg_confidence:.2f})"
+            else:
+                return True, f"high_confidence_speech_over_music ({avg_confidence:.2f})"
+    
+    # If no classification data, use confidence alone
+    if avg_confidence < 0.4:
+        return False, f"very_low_confidence ({avg_confidence:.2f})"
+    
+    # Default: subtitle
+    return True, "default_subtitle"
+
+
 def mark_music_segments(
     segments: List[dict],
     audio_path: Path,
-    music_marker: str = "(MUSIC)"
+    music_marker: str = "(MUSIC)",
+    confidence_threshold: float = 0.6
 ) -> Tuple[List[dict], int]:
     """
-    Mark segments that fall within music time ranges.
+    Mark segments that should be hidden/replaced based on multi-signal analysis.
     
-    Uses inaSpeechSegmenter to detect music regions in the audio,
-    then marks any transcript segments within those regions.
+    Uses the full classification pipeline to determine which segments are:
+    - Pure music (mark as MUSIC)
+    - Singing (mark as MUSIC)
+    - Speech (keep original text)
+    - Speech over music (keep original text)
     
     Args:
         segments: List of segment dicts with 'start', 'end', 'text'
         audio_path: Path to the source audio file
         music_marker: Text to replace segment content with
+        confidence_threshold: Min word confidence to keep during music
         
     Returns:
         Tuple of (modified segments, count of marked segments)
@@ -155,28 +368,56 @@ def mark_music_segments(
     if not segments:
         return segments, 0
     
-    music_ranges = get_music_ranges(audio_path)
-    if not music_ranges:
+    if CLASSIFICATION_MODE == "off":
         return segments, 0
+    
+    # Get classification data (cached after first call)
+    music_ranges = []
+    speech_ranges = []
+    
+    try:
+        music_ranges = get_music_ranges(audio_path)
+        speech_ranges = get_speech_ranges(audio_path)
+    except Exception as e:
+        logger.warning(f"⚠️ Full classification failed: {e}. Using confidence-only mode.")
     
     marked_count = 0
     
     for segment in segments:
-        start = segment.get('start', 0)
-        end = segment.get('end', 0)
-        mid = (start + end) / 2
+        should_sub, reason = should_subtitle_segment(
+            segment,
+            audio_path=audio_path,
+            music_ranges=music_ranges,
+            speech_ranges=speech_ranges,
+            confidence_threshold=confidence_threshold
+        )
         
-        if is_music_timestamp(mid, music_ranges):
+        if not should_sub:
             segment['original_text'] = segment.get('text', '')
             segment['text'] = music_marker
             segment['is_music'] = True
-            segment['music_source'] = 'inaSpeechSegmenter'
+            segment['music_source'] = 'multi_signal_fusion'
+            segment['skip_reason'] = reason
             marked_count += 1
+            logger.debug(f"🎵 Marked as music: [{segment.get('id', '?')}] {reason}")
+    
+    if marked_count > 0:
+        logger.info(f"🎵 Multi-signal classifier: Marked {marked_count} segments as (MUSIC)")
     
     return segments, marked_count
 
 
-# Quick availability check for use without full import
+# --- Public API ---
+
 def is_available() -> bool:
-    """Check if inaSpeechSegmenter is available."""
-    return _check_segmenter_available()
+    """Check if any audio classification is available."""
+    if CLASSIFICATION_MODE == "off":
+        return False
+    if CLASSIFICATION_MODE == "light":
+        return _check_vad_available()
+    return _check_segmenter_available() or _check_vad_available()
+
+
+def get_classification_mode() -> str:
+    """Return the current classification mode."""
+    return CLASSIFICATION_MODE

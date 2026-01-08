@@ -247,7 +247,7 @@ def render_overlay(
     
     profile_cfg = PROFILES.get(profile_name)
     if not profile_cfg:
-        print(f"Unknown profile '{profile}'. Available: {', '.join(PROFILES.keys())}")
+        print(f"Unknown profile '{profile_name}'. Available: {', '.join(PROFILES.keys())}")
         sys.exit(1)
 
     video_path = Path(video_path)
@@ -302,29 +302,43 @@ def render_overlay(
     with tempfile.TemporaryDirectory() as tmpdir:
         tmpdir_path = Path(tmpdir)
         
-        # Prepare arguments for parallel processing
-        # Group frames by their content to enable deduplication
-        frame_args = []
-        for frame_idx in range(total_frames):
-            frame_args.append((
-                frame_idx, width, height, processed_events,
-                profile_cfg["font_path"], profile_cfg["font_size"],
-                profile_cfg, tmpdir_path
-            ))
-        
         # Render frames in parallel
-        num_workers = max(1, cpu_count() - 1)  # Leave one core free
+        env_workers = os.environ.get("OMEGA_OVERLAY_WORKERS")
+        if env_workers:
+            try:
+                num_workers = max(1, int(env_workers))
+            except ValueError:
+                num_workers = max(1, min(cpu_count() - 1, 4))
+        else:
+            num_workers = max(1, min(cpu_count() - 1, 4))  # Leave one core free, cap for stability
         print(f"   Using {num_workers} parallel workers...")
         
         if stem:
             omega_db.update(stem, status=f"Rendering frames ({num_workers} workers)", progress=80.0)
         
-        rendered_frames = {}
+        rendered_frames: list[Optional[tuple[str, ...]]] = [None] * total_frames
         with Pool(processes=num_workers) as pool:
             # Process frames in chunks for progress updates
-            chunk_size = 100
-            for i in range(0, len(frame_args), chunk_size):
-                chunk = frame_args[i:i + chunk_size]
+            try:
+                chunk_size = int(os.environ.get("OMEGA_OVERLAY_CHUNK_SIZE", "100") or 100)
+            except ValueError:
+                chunk_size = 100
+            chunk_size = max(10, min(chunk_size, 1000))
+            for start in range(0, total_frames, chunk_size):
+                end = min(total_frames, start + chunk_size)
+                chunk = [
+                    (
+                        frame_idx,
+                        width,
+                        height,
+                        processed_events,
+                        profile_cfg["font_path"],
+                        profile_cfg["font_size"],
+                        profile_cfg,
+                        tmpdir_path,
+                    )
+                    for frame_idx in range(start, end)
+                ]
                 results = pool.map(_render_frame_worker, chunk)
                 
                 for frame_idx, key in results:
@@ -332,14 +346,14 @@ def render_overlay(
                 
                 # Progress update
                 if stem:
-                    prog = 80.0 + (i / total_frames) * 10.0
+                    prog = 80.0 + (end / total_frames) * 10.0
                     omega_db.update(stem, progress=min(90.0, prog))
         
         # Deduplicate identical frames (link instead of copy)
         print(f"   Deduplicating frames...")
         key_to_frame = {}
         for frame_idx in range(total_frames):
-            key = rendered_frames.get(frame_idx, ("__blank__",))
+            key = rendered_frames[frame_idx] or ("__blank__",)
             frame_path = tmpdir_path / f"{frame_idx:06d}.png"
             
             if key in key_to_frame and key != ("__blank__",):

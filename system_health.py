@@ -31,3 +31,22 @@ def update_heartbeat(process_name):
         beat_file.touch()
     except Exception:
         pass
+
+
+def check_memory(min_mb=500):
+    """
+    Best-effort memory check. Returns True if available memory is above threshold.
+    Fails open if system APIs are unavailable.
+    """
+    try:
+        import psutil  # Optional dependency
+    except Exception:
+        return True
+    try:
+        avail_mb = psutil.virtual_memory().available / (1024 * 1024)
+        if avail_mb < min_mb:
+            print(f"   ❌ CRITICAL WARNING: Low Memory! {avail_mb:.0f} MB free (Min: {min_mb} MB)")
+            return False
+        return True
+    except Exception:
+        return True

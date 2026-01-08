@@ -46,3 +46,6 @@ heartbeats/*.restart
 !*_SKELETON.json
 !*_APPROVED.json
 *.zip
+
+# Local Netlify folder
+.netlify

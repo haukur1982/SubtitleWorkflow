@@ -17,7 +17,7 @@ import system_health
 logger = logging.getLogger("OmegaManager.Translator")
 
 # --- CONFIG ---
-PROJECT_ID = "sermon-translator-system"
+PROJECT_ID = config.OMEGA_CLOUD_PROJECT
 BUCKET_NAME = "audio-hq-sermon-translator-55"
 LOCATION = config.GEMINI_LOCATION
 MAX_WORKERS = 3
@@ -237,6 +237,7 @@ def _translate_batch_once(
     *,
     target_language: str,
     program_profile: str,
+    audio_context: Optional[Part] = None,
 ) -> list[dict]:
     terminology_note = ""
     if target_language.lower() in {"icelandic", "is"}:
@@ -276,8 +277,12 @@ def _translate_batch_once(
         temperature=0.3,
     )
 
+    contents = [prompt]
+    if audio_context:
+        contents.append(audio_context)
+
     response = model.generate_content(
-        prompt,
+        contents,
         generation_config=generation_config,
         safety_settings=SAFETY_SETTINGS,
     )
@@ -322,6 +327,7 @@ def translate_batch_with_cache(
     max_attempts: int = 6,
     split_after_attempts: int = 2,
     _depth: int = 0,
+    audio_context: Optional[Part] = None,
 ) -> list[dict]:
     """
     Translates a batch of segments using the cached context.
@@ -341,6 +347,7 @@ def translate_batch_with_cache(
                 batch,
                 target_language=target_language,
                 program_profile=program_profile,
+                audio_context=audio_context,
             )
         except (json.JSONDecodeError, ValueError) as exc:
             last_exc = exc
@@ -372,6 +379,7 @@ def translate_batch_with_cache(
         max_attempts=max_attempts,
         split_after_attempts=split_after_attempts,
         _depth=_depth + 1,
+        audio_context=audio_context,
     )
     right = translate_batch_with_cache(
         model,
@@ -381,6 +389,7 @@ def translate_batch_with_cache(
         max_attempts=max_attempts,
         split_after_attempts=split_after_attempts,
         _depth=_depth + 1,
+        audio_context=audio_context,
     )
     return left + right
 
@@ -444,7 +453,9 @@ def create_context_cache(gcs_uri: str, stem: str, target_language: str = "Icelan
         logger.info(f"✅ Cache Active! ID: {cached_content.name}")
         return cached_content.name
     except Exception as e:
-        logger.error(f"Cache Creation Failed: {e}")
+        return cached_content.name
+    except Exception as e:
+        logger.warning(f"Cache Creation Failed (will fallback): {e}")
         return None
 
 def translate(transcription_path: Path, target_language_code: str = "is", program_profile: str = "standard"):
@@ -558,18 +569,34 @@ def translate(transcription_path: Path, target_language_code: str = "is", progra
         except Exception:
             cache_name = None
 
+    audio_context: Optional[Part] = None
     if not cache_name:
+        # Prepare system instruction for fallback
+        lang_map_full = {
+            "icelandic": "is", "english": "en", "spanish": "es", 
+            "french": "fr", "german": "de", "portuguese": "pt", "italian": "it"
+        }
+        l_code = lang_map_full.get(target_language.lower(), target_language.lower())
+        sys_inst = profiles.get_system_instruction(l_code, program_profile)
+        
         cache_name = create_context_cache(gcs_uri, stem, target_language, program_profile=program_profile)
-        if not cache_name:
-            raise Exception("Cache creation failed")
-        checkpoint["cache_name"] = cache_name
-        checkpoint["cache_model"] = config.MODEL_TRANSLATOR
-        checkpoint["cache_created_at"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
-        _atomic_write_json(checkpoint_path, checkpoint)
+        
+        if cache_name:
+            checkpoint["cache_name"] = cache_name
+            checkpoint["cache_model"] = config.MODEL_TRANSLATOR
+            checkpoint["cache_created_at"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
+            _atomic_write_json(checkpoint_path, checkpoint)
 
-        model = GenerativeModel.from_cached_content(
-            cached_content=caching.CachedContent(cached_content_name=cache_name)
-        )
+            model = GenerativeModel.from_cached_content(
+                cached_content=caching.CachedContent(cached_content_name=cache_name)
+            )
+        else:
+            # FALLBACK: No cache (e.g. content too short or error)
+            # Use standard model and pass audio context in every request
+            logger.warning("⚠️ Using Per-Request Audio Context (No Cache)")
+            model = GenerativeModel(config.MODEL_TRANSLATOR, system_instruction=sys_inst)
+            mime_type = "audio/wav" if gcs_uri.endswith(".wav") else "audio/mpeg"
+            audio_context = Part.from_uri(mime_type=mime_type, uri=gcs_uri)
 
     success = False
     try:
@@ -599,6 +626,7 @@ def translate(transcription_path: Path, target_language_code: str = "is", progra
                 program_profile,
                 max_attempts=max_attempts,
                 split_after_attempts=split_after_attempts,
+                audio_context=audio_context,
             )
             for item in translated_batch:
                 translated_map[str(item["id"])] = item["text"]
